@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>EnviroBot RC</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #060912; color: #F0F4FF;
+  font-family: system-ui, -apple-system, sans-serif;
+  display: flex; flex-direction: column;
+  height: 100dvh; overflow: hidden;
+  user-select: none; -webkit-user-select: none;
+  touch-action: none;
+}
+header {
+  padding: 12px 20px;
+  background: rgba(10,14,26,0.95);
+  border-bottom: 1px solid #1F2D45;
+  font-size: 13px; letter-spacing: 0.1em;
+  display: flex; align-items: center; justify-content: space-between;
+}
+#logo { color: #F0F4FF; }
+#logo span { color: #00D4AA; }
+#status { font-size: 11px; color: #4A5880; transition: color 300ms; }
+#status.ok  { color: #00D4AA; }
+#status.err { color: #EF9A9A; }
+
+main {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: space-evenly;
+  padding: 16px 20px;
+  gap: 12px;
+}
+
+/* ── D-Pad ── */
+.dpad {
+  display: grid;
+  grid-template-areas: ". fwd ." "lft stp rgt" ". bwd .";
+  grid-template-columns: 76px 76px 76px;
+  grid-template-rows: 76px 76px 76px;
+  gap: 6px;
+}
+.btn {
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 16px; font-size: 24px; cursor: pointer;
+  background: #111827; border: 1px solid #1F2D45;
+  transition: transform 80ms, background 80ms;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:active { transform: scale(0.92); background: #1A2235; }
+.btn[data-cmd="FWD"]   { grid-area: fwd; }
+.btn[data-cmd="BWD"]   { grid-area: bwd; }
+.btn[data-cmd="LEFT"]  { grid-area: lft; }
+.btn[data-cmd="RIGHT"] { grid-area: rgt; }
+.btn[data-cmd="STOP"]  {
+  grid-area: stp;
+  background: rgba(198,40,40,0.12);
+  border-color: rgba(198,40,40,0.35);
+  font-size: 18px;
+}
+
+/* ── Sector selector ── */
+.sectors { display: flex; gap: 6px; align-items: center; }
+.sectors .label { font-size: 11px; color: #4A5880; letter-spacing: 0.08em; margin-right: 4px; }
+.sector-btn {
+  width: 44px; height: 38px; border-radius: 10px;
+  background: #111827; border: 1px solid #1F2D45; color: #8899BB;
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: transform 80ms, background 80ms, border-color 80ms;
+  -webkit-tap-highlight-color: transparent;
+}
+.sector-btn:active { transform: scale(0.94); }
+.sector-btn.active {
+  background: rgba(0,212,170,0.12);
+  border-color: rgba(0,212,170,0.5);
+  color: #00D4AA;
+}
+
+/* ── Sample buttons ── */
+.samples { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.sample-btn {
+  padding: 14px 22px; border-radius: 14px;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  letter-spacing: 0.06em; cursor: pointer; border: 1px solid;
+  transition: transform 80ms, opacity 150ms;
+  -webkit-tap-highlight-color: transparent;
+}
+.sample-btn:active { transform: scale(0.94); }
+.sample-btn.loading { opacity: 0.55; pointer-events: none; }
+.water-btn { background: rgba(2,119,189,0.12); border-color: rgba(2,119,189,0.4); color: #4FC3F7; }
+.soil-btn  { background: rgba(141,78,18,0.12); border-color: rgba(141,78,18,0.4);  color: #BCAAA4; }
+.end-btn   { background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.4); color: #F5C36B; }
+
+/* ── Log ── */
+#log {
+  width: 100%; max-width: 380px; height: 90px;
+  overflow-y: auto; font-size: 11px;
+  padding: 8px 12px; border-radius: 10px;
+  background: #0D1420; border: 1px solid #1F2D45;
+  scroll-behavior: smooth;
+}
+.log-line        { padding: 1px 0; color: #4A5880; }
+.log-line.water  { color: #4FC3F7; }
+.log-line.soil   { color: #BCAAA4; }
+.log-line.error  { color: #EF9A9A; }
+</style>
+</head>
+<body>
+<header>
+  <span id="logo">ENVIRO<span>BOT</span> RC</span>
+  <span id="status">connecting…</span>
+</header>
+
+<main>
+  <!-- D-pad -->
+  <div class="dpad" aria-label="Drive controls">
+    <div class="btn" data-cmd="FWD"   aria-label="Forward">▲</div>
+    <div class="btn" data-cmd="LEFT"  aria-label="Left">◀</div>
+    <div class="btn" data-cmd="STOP"  aria-label="Stop">■</div>
+    <div class="btn" data-cmd="RIGHT" aria-label="Right">▶</div>
+    <div class="btn" data-cmd="BWD"   aria-label="Backward">▼</div>
+  </div>
+
+  <!-- Sector selector — tag samples with the sector the robot is in -->
+  <div class="sectors" aria-label="Current sector">
+    <span class="label">SECTOR</span>
+    <button class="sector-btn active" data-sector="1">S1</button>
+    <button class="sector-btn" data-sector="2">S2</button>
+    <button class="sector-btn" data-sector="3">S3</button>
+    <button class="sector-btn" data-sector="4">S4</button>
+  </div>
+
+  <!-- Sample buttons -->
+  <div class="samples">
+    <button class="sample-btn water-btn" id="btnWater">💧 Sample Water</button>
+    <button class="sample-btn soil-btn"  id="btnSoil">🌱 Sample Soil</button>
+    <button class="sample-btn end-btn"   id="btnEnd">🏁 End Run</button>
+  </div>
+
+  <!-- Log -->
+  <div id="log" aria-live="polite"><div class="log-line">Ready.</div></div>
+</main>
+
+<script>
+const statusEl = document.getElementById('status');
+const logEl    = document.getElementById('log');
+let driveTimer = null;
+let sector     = 1;
+
+function ts() {
+  return new Date().toLocaleTimeString('en', { hour12: false });
+}
+
+function addLog(text, cls) {
+  const el = document.createElement('div');
+  el.className = 'log-line' + (cls ? ' ' + cls : '');
+  el.textContent = ts() + '  ' + text;
+  logEl.appendChild(el);
+  logEl.scrollTop = logEl.scrollHeight;
+  while (logEl.children.length > 40) logEl.removeChild(logEl.firstChild);
+}
+
+async function post(cmd, extra) {
+  try {
+    const r = await fetch('/rc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ cmd }, extra || {})),
+    });
+    statusEl.textContent = 'connected'; statusEl.className = 'ok';
+    return r.ok ? r.json() : null;
+  } catch (e) {
+    statusEl.textContent = 'offline'; statusEl.className = 'err';
+    return null;
+  }
+}
+
+// ── Drive D-pad (hold = repeat) ──────────────────────────────────
+document.querySelectorAll('.btn[data-cmd]').forEach(btn => {
+  const cmd = btn.dataset.cmd;
+
+  const startDrive = () => {
+    post(cmd);
+    if (cmd !== 'STOP') driveTimer = setInterval(() => post(cmd), 120);
+  };
+  const stopDrive = () => {
+    clearInterval(driveTimer);
+    driveTimer = null;
+    if (cmd !== 'STOP') post('STOP');
+  };
+
+  btn.addEventListener('touchstart',  e => { e.preventDefault(); startDrive(); }, { passive: false });
+  btn.addEventListener('touchend',    e => { e.preventDefault(); stopDrive(); },  { passive: false });
+  btn.addEventListener('touchcancel', e => { e.preventDefault(); stopDrive(); },  { passive: false });
+  btn.addEventListener('mousedown',   startDrive);
+  btn.addEventListener('mouseup',     stopDrive);
+  btn.addEventListener('mouseleave',  stopDrive);
+});
+
+// ── Sector selector ──────────────────────────────────────────────
+document.querySelectorAll('.sector-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    sector = parseInt(btn.dataset.sector, 10);
+    document.querySelectorAll('.sector-btn').forEach(b => b.classList.toggle('active', b === btn));
+    addLog('Sector set to S' + sector);
+  });
+});
+
+// ── Sample buttons ────────────────────────────────────────────────
+document.getElementById('btnWater').addEventListener('click', async function() {
+  this.classList.add('loading');
+  this.textContent = '💧 Sampling…';
+  const data = await post('SAMPLE_WATER', { sector });
+  this.classList.remove('loading');
+  this.textContent = '💧 Sample Water';
+  if (data) addLog('S' + sector + ' WATER: ' + data.ntu.toFixed(1) + ' NTU', 'water');
+  else      addLog('Sample failed', 'error');
+});
+
+document.getElementById('btnSoil').addEventListener('click', async function() {
+  this.classList.add('loading');
+  this.textContent = '🌱 Sampling…';
+  const data = await post('SAMPLE_SOIL', { sector });
+  this.classList.remove('loading');
+  this.textContent = '🌱 Sample Soil';
+  if (data) addLog('S' + sector + ' SOIL: ' + data.pct.toFixed(1) + '%', 'soil');
+  else      addLog('Sample failed', 'error');
+});
+
+document.getElementById('btnEnd').addEventListener('click', async function() {
+  const data = await post('END_RUN');
+  if (data) addLog('Run finalised — results.json saved');
+  else      addLog('End run failed', 'error');
+});
+
+// ── Heartbeat ────────────────────────────────────────────────────
+setInterval(async () => {
+  try {
+    await fetch('/data', { method: 'GET', signal: AbortSignal.timeout(2000) });
+    statusEl.textContent = 'connected'; statusEl.className = 'ok';
+  } catch {
+    statusEl.textContent = 'offline'; statusEl.className = 'err';
+  }
+}, 4000);
+</script>
+</body>
+</html>

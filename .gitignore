@@ -1,0 +1,10 @@
+node_modules/
+.next/
+.open-next/
+.vercel/
+graphify-out/
+.claude/
+.impeccable/
+*.log
+.dev.vars
+.env*

@@ -1,3 +1,4 @@
 [submodule "webapp"]
 	path = webapp
 	url = https://github.com/YerielShantuy/Enviorbot.git
+	branch = master

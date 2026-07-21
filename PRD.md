@@ -32,7 +32,7 @@ EnviroBot is a two-part system: an ESP32-based environmental survey robot and a 
 1. **Tier 1 (must work)**: RC driving + manual sampling + sector tagging + compliant data output. This alone reaches the 18–22 band of Category 1 if sensors are accurate.
 2. **Tier 2 (must work)**: Sensor calibration to ±10% of reference — highest-value engineering time in the project.
 3. **Tier 3 (must prepare)**: Closing Night case competition — 40 pts, the single biggest category. Practice arguing from collected data.
-4. **Tier 4 (stretch)**: Autonomous wander mode (IMU heading + ToF wall avoidance + colour zone detection). Demoed only if reliable.
+4. **Tier 4 (stretch)**: Autonomous wander mode (dead-reckoned heading + ultrasonic wall avoidance + colour zone detection). More degraded without an IMU — demoed only if reliable.
 
 ---
 
@@ -86,19 +86,18 @@ Servo 180° → Arm B (soil probe) DOWN on disc | Arm A UP
 | Component | Qty | Role |
 |---|---|---|
 | ESP32 DevKit v1 | 1 | Main MCU — WiFi AP, FSM, REST API |
-| MPU6050 IMU | 1 | DMP yaw — heading hold (I2C bus 0, 0x68) |
 | MG996R Servo | 1 | Double-arm sensor deployment |
-| SEN0189 Turbidity Sensor | 1 | Water NTU (via voltage divider → GPIO36) |
-| Capacitive Soil Moisture v2 | 1 | Soil moisture % (GPIO39) |
-| TCS34725 Colour Sensor | 1 | Zone detection (I2C bus 0, 0x29) — **mounted ahead of front wheels** |
-| VL53L0X ToF Distance Sensor | 1 | Wall detection (I2C bus 1 / Wire1 on GPIO16/17 — clashes with TCS34725 at 0x29 otherwise) |
+| SEN0189 Turbidity Sensor | 1 | Water NTU (via voltage divider → GPIO34) |
+| Capacitive Soil Moisture v2 | 1 | Soil moisture % (GPIO35) |
+| TCS34725 Colour Sensor | 1 | Zone detection (I2C, 0x29) — **mounted ahead of front wheels** |
+| HC-SR04 Ultrasonic Sensor | 1 | Wall detection (TRIG GPIO16 / ECHO GPIO17 via 5V→3.3V divider) |
 | L298N Motor Driver | 1 | Drives both DC gearmotors (~2V drop — expect reduced speed on 7.4V) |
 | JGA25-370 DC Gearmotor | 2 | Differential drive — **no encoders** |
 | LM2596 Buck Converter | 1 | 7.4V → 5V for servo/sensors |
 | AMS1117 3.3V Regulator | 1 | 3.3V rail for ESP32 |
 | LiPo 7.4V 2200mAh | 1 | Main power |
 
-Removed from v1.0 BOM: hall encoders (hardware doesn't have them), TCA9548A mux (replaced by second I2C bus).
+Removed: hall encoders (hardware doesn't have them), TCA9548A mux, **MPU6050 IMU**, and **VL53L0X ToF** (2026-07-10 component revision). Wall detection is now a single HC-SR04 ultrasonic; TCS34725 is the sole I2C device. Trade-off: no IMU means heading is open-loop dead reckoning only (drifts).
 
 ### 4.5 Operation Modes
 
@@ -111,7 +110,7 @@ Removed from v1.0 BOM: hall encoders (hardware doesn't have them), TCA9548A mux 
 - Every sample also printed to serial — the rulebook-approved output fallback
 
 **Mode 2 — Autonomous FSM (stretch)**
-- Wander pattern: IMU heading hold, ~135° bounce at walls (VL53L0X) and after samples
+- Wander pattern: dead-reckoned heading hold, ~135° bounce at walls (HC-SR04) and after samples
 - Zone detection via TCS34725 (thresholds calibrated on real arena)
 - Time-based re-sample lockout (no coordinates without encoders)
 - Hard 8-minute cap → COMPLETE + finalise
@@ -124,7 +123,7 @@ INIT → SWEEP ←→ POND_SAMPLE → POND_BACKOFF (reverse + turn away)
              → COMPLETE (12 samples or 8 min elapsed; server stays up for /data)
 ```
 
-Known limitation (accepted): if the robot gets stuck, officials move it to arena centre — heading survives (IMU) but position estimate is lost. Path log is best-effort; samples and sectors remain valid.
+Known limitation (accepted): with no IMU or encoders, heading and position drift over a run and are fully lost if officials reposition the robot. Path log is best-effort; samples and sectors (operator-tagged in RC) remain valid.
 
 ### 4.7 Data Output Compliance (rulebook §4.6)
 Approved: serial monitor, live plot on connected computer, printed log/CSV.

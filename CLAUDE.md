@@ -8,9 +8,9 @@ ESP32 environmental survey robot + Next.js web platform for the EnviroBot Enviro
 - **Strategy**: RC-first. Remote control is fully rulebook-legal; autonomy is a stretch goal for the top accuracy band + innovation points.
 
 ## Hardware Truths (do not contradict)
-- **No wheel encoders.** Position is IMU heading + commanded-speed estimate (`position.cpp`), path log only — never for safety decisions.
+- **No wheel encoders, no IMU.** Position AND heading are open-loop dead-reckoned from commanded wheel speeds (`position.cpp`), path log only — never for safety decisions.
 - **SEN0189 needs a voltage divider** before the ESP32 ADC (outputs ~4.5V, pin max 3.3V). Ratio in `config.h` `TURBIDITY_DIVIDER_RATIO`.
-- **TCS34725 and VL53L0X both use I2C address 0x29** — VL53L0X lives on second bus `Wire1` (pins 16/17). No TCA9548A mux.
+- **TCS34725 is the only I2C device** (0x29 on `Wire`, pins 21/22). Wall detection is an **HC-SR04 ultrasonic** — TRIG GPIO16, ECHO GPIO17; ECHO returns 5V so it needs a 5V→3.3V divider.
 - **GPIO 21/22 are I2C only** — never assign to motors.
 - **Colour sensor must be mounted ahead of the front wheels** — water slots are recessed; detection must fire before a wheel reaches the slot edge.
 
@@ -32,10 +32,10 @@ Enviorbot/
 │   ├── envirobot/
 │   │   ├── envirobot.ino         → Main sketch; WiFi AP + server in BOTH modes
 │   │   ├── config.h              → Pins, calibration knobs, thresholds
-│   │   ├── sensors.cpp/.h        → Turbidity (divider) + soil + TCS34725 + VL53L0X (Wire1)
+│   │   ├── sensors.cpp/.h        → Turbidity (divider) + soil + TCS34725 + HC-SR04 ultrasonic
 │   │   ├── servo_arm.cpp/.h      → Double-arm servo (0°=water, 90°=neutral, 180°=soil)
 │   │   ├── navigation.cpp/.h     → FSM: wander + zone detect + pond backoff + 8-min cap
-│   │   ├── position.cpp/.h       → IMU heading + speed-model position (NO encoders)
+│   │   ├── position.cpp/.h       → open-loop dead reckoning from commanded speeds (NO encoders, NO IMU)
 │   │   ├── data_logger.cpp/.h    → Frozen-schema JSON → SPIFFS + /data
 │   │   ├── rc_page.h             → AUTO-GENERATED PROGMEM copy of rc_page/index.html
 │   │   └── wifi_server.cpp/.h    → AP HTTP server (GET /data, POST /rc)
@@ -69,13 +69,24 @@ Never move servo while robot is moving. Always return to 90° after sampling.
 ## RC Commands (POST /rc)
 ```json
 { "cmd": "FWD"|"BWD"|"LEFT"|"RIGHT"|"STOP", "speed": 0-255 }   // speed optional, drive cmds only
-{ "cmd": "SAMPLE_WATER", "sector": 1-4 }   // arm 0° → read → 90°; sector tags the sample
-{ "cmd": "SAMPLE_SOIL",  "sector": 1-4 }   // arm 180° → read → 90°
-{ "cmd": "END_RUN" }                        // finalise + save results.json to SPIFFS
+{ "cmd": "SAMPLE_WATER", "sector": 1-4 }   // arm 0° → settle 2s → 3s median window → 90°; ~6s total
+{ "cmd": "SAMPLE_SOIL",  "sector": 1-4 }   // arm 180° → same settle+window → 90°
+{ "cmd": "CAL_FWD",  "ms": 200-10000 }     // timed drive at DRIVE_SPEED, auto-stop (calibration — see arduino/CALIBRATION.md)
+{ "cmd": "CAL_SPIN", "ms": 200-10000 }     // timed in-place spin at TURN_SPEED, auto-stop
+{ "cmd": "END_RUN" }                        // finalise + save results.json to SPIFFS + HTTPS POST to webapp /api/viz-runs (practice/demo only, needs phone hotspot; STA creds + UPLOAD_URL in config.h)
+{ "cmd": "START" }                          // autonomous only: arms FSM_INIT → run starts (also: BOOT button press). Robot never drives at power-on
+{ "cmd": "REZERO", "h": 0-359 }             // re-zero dead-reckoned pose to origin at eyeballed heading (officials re-centre stuck robots — rulebook 5.2.1)
 ```
+`GET /pos` → `{"x","y","h","t","ip"}` — live dead-reckoned position + run seconds (RC page polls at 2Hz, shows ⏱ amber at 7:00 / red at 8:00). `GET /samples` → samples-only JSON for `arduino/tools/live_plot.py`. WiFi is AP+STA: RobotAP always up, STA joins phone hotspot in background for upload.
+
+**Run clock**: `startRun()` (data_logger) resets the JSON doc + clock. Fires on the first RC drive/sample after boot or END_RUN, and at autonomous START. Outside a live run, path logging and `total_duration_s` are frozen — never let `t_s` count from power-on. `WIFI_STA_*` creds in `config.h` are real — `sync-code.mjs` redacts them before the public `/code` browser; keep it that way.
+
+**Autonomous pose convention**: run starts with robot at arena centre, heading = +x. Sector = dead-reckoned quadrant via `SECTOR_MAP` in `config.h` (confirm quadrant→sector mapping on Testing Day). After an official re-centres a stuck robot, send `REZERO` with the eyeballed heading.
 
 ## Data Output Compliance (rulebook §4.6)
 Approved formats: serial monitor, live plot on connected computer, printed log/CSV. The WiFi webapp is an **alternative method — needs prior written approval** from Project Directors (createunsw@gmail.com + unsw@studentenergy.org). Serial output of every sample is the always-legal fallback — never remove the `Serial.printf` sample lines.
+
+**Primary judged output**: `arduino/tools/live_plot.py` — matplotlib live table + labelled bar charts (§4.6's own named example) + `samples.csv`. Serial mode (`--port COM5`) for inspection; URL mode (`--url http://192.168.4.1/samples`) over RobotAP during the run. Parses the `[SAMPLE] S<n> <TYPE> <value>` serial format — keep firmware serial lines in that exact shape.
 
 ## Deploy (Cloudflare Workers via OpenNext + Wrangler — strictly no Vercel)
 ```powershell

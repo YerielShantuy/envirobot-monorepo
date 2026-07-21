@@ -1,8 +1,41 @@
 # EnviroBot — Build Checkpoint
 
-Last updated: 2026-07-07 (post-audit)
+Last updated: 2026-07-16 (autonomy hardening + run clock + live table)
 
-## Status: AUDITED — firmware rewritten, plan v2.0, RC-first strategy
+## Status: firmware feature-complete for RC + autonomy stretch; next = flash + bench FSM test + calibration
+
+---
+
+## Autonomy + output session (2026-07-16)
+
+**Autonomy hardening** (user session, CodeRabbit-reviewed, all inside `#if ENABLE_AUTONOMOUS`): armed-start gate (`START` cmd / BOOT press, LED blink while armed, backdated lockout), `SAMPLE_CREEP_MS` probe nudge (default 0, CALIBRATION.md §6), 8s leg timeout stuck-escape, avoid-backoffs no longer re-arm the sample lockout, water/soil caps 4/8, sector from dead-reckoned quadrant + `SECTOR_MAP`, `REZERO` cmd + `resetPose()`, confirm re-read kills phantom samples, no sampling in final 8s (`SAMPLE_TIME_BUDGET_MS`), heading deadband 0.20 rad, ±0.35 rad bounce jitter, TCS integration 50→24ms (recalibrate thresholds at 24ms!).
+
+**Live table (§4.6 judged output)**: `arduino/tools/live_plot.py` — matplotlib live table + labelled NTU/moisture bar charts + `samples.csv`; `--port COM5` or `--url http://192.168.4.1/samples` (new lightweight endpoint). Webapp §4.6 approval email now optional.
+
+**Reaudit fixes (this session)**:
+- **Run clock**: `startRun()`/`runLive()`/`runElapsedS()` in `data_logger` — doc + clock reset on first RC drive/sample or autonomous START; path logging and totals frozen outside a live run (previously `t_s`/`total_duration_s`/path counted from power-on; path cap filled with pre-run idle points). END_RUN freezes; next drive opens a fresh doc
+- **RC page**: ⏱ run timer in posbar from `/pos` `t` field (amber 7:00, red 8:00); no false "offline" during the ~6s blocking sample; `rc_page.h` regenerated (15.9KB)
+- **Creds**: `sync-code.mjs` now redacts `WIFI_STA_SSID/PASS` before publishing to the public `/code` browser (live R2 copy verified pre-STA — no leak occurred); push path also fixed to byte-correct Content-Length
+- **`UPLOAD_URL`**: set to `https://envirobot.yerielph.workers.dev/api/viz-runs` — worker verified live (deployed 2026-07-09), endpoint returns runs
+- Docs: PLAN Phase 1 GPIO36→34 corrected (user confirmed 34), aesthetics task added (Cat 5), innovation pitch bullet refreshed (dual-I2C claim removed — hardware dropped 07-10), integration checklist gained run-clock + live_plot items; `sensors.h` 50ms comment → 24ms
+
+**Next**: flash `ENABLE_AUTONOMOUS 1`, wheels off ground, bench-trigger the FSM (PLAN Phase 3) · Phase 2 calibration · re-seed `/code` via `sync-code.mjs --push`.
+
+---
+
+## Component revision (2026-07-10)
+
+Hardware reduced to what's actually on hand. **Dropped: MPU6050 IMU, VL53L0X ToF.** **Added: HC-SR04 ultrasonic** (wall detection only). Motors (2× JGA25-370 + L298N), MG996R servo, SEN0189 turbidity, capacitive soil, TCS34725 all unchanged.
+
+Firmware follow-through:
+- `config.h` — dropped second I2C bus + VL53L0X `WALL_STOP` comment; added `PIN_ULTRASONIC_TRIG/ECHO` (16/17) + `ULTRASONIC_TIMEOUT_US`; added `WHEEL_BASE_MM` for the new heading model
+- `sensors.cpp/.h` — removed `VL53L0X`; `readToFDistanceMM()` → `readWallDistanceMM()` (HC-SR04 `pulseIn`, 0.343 mm/µs, timeout → "no wall")
+- `position.cpp/.h` — removed MPU6050 DMP; heading now open-loop from the differential-drive model `ω=(vR−vL)/WHEEL_BASE_MM`. Drifts (no gyro) — path log only. `headingValid()` always true
+- `navigation.cpp/.h` — dead-IMU refuse block removed (nothing to fail); `readWallDistanceMM()`; FSM comment now "ultrasonic"
+- `envirobot.ino` — `initPosition()` no longer waits ~2s for DMP
+- tests — deleted `test_mpu6050`, `test_vl53l0x`; added `test_ultrasonic`
+
+Impact: heading/position drift more than before (no IMU) and don't survive a reposition — RC-first strategy already treats the path log as best-effort, so scoring is unaffected. **Hardware TODO: rewire per PLAN §Phase 1 (HC-SR04 ECHO needs a 5V→3.3V divider), recalibrate `WHEEL_BASE_MM` via a 360° in-place spin.**
 
 ---
 
@@ -35,17 +68,19 @@ Docs: PRD → v1.1 (real scoring table, RC-first, compliance section) · PLAN �
 
 ## Pending — resume here (PLAN.md v2.0 is the source of truth)
 
-1. **Phase 0**: organiser email (scoring contradiction + webapp output approval) — blocking, human task
-2. **Phase 1 hardware: COMPLETE** (2026-07-08) — divider ✓, colour sensor ahead of wheels ✓, rewired to new pin map ✓. Divider assumed ratio 2.0 — update `TURBIDITY_DIVIDER_RATIO` if resistors differ. Next: Phase 2 bring-up + calibration
-3. **Phase 2**: bring-up + sensor calibration (±10% target)
-4. **Phase 5 deploy**: `wrangler secret put` for `R2_*` / `SUPABASE_*` / admin → `npm run deploy` → hit "Seed code" in `/admin` → clear stale `docs_pages` rows in Supabase (they override baked-in docs) → retire old Pages project
-5. `/viz` against a real robot-produced `results.json`; Emil design review; full code review; graphify update
+1. **Phase 0**: organiser email (scoring weightings + RC-band question; webapp approval now optional) — user's call, deliberately deferred 2026-07-16
+2. **Phase 1 hardware: COMPLETE** (2026-07-08) — divider on GPIO34 ✓, colour sensor ahead of wheels ✓, rewired to new pin map ✓. Divider assumed ratio 2.0 — update `TURBIDITY_DIVIDER_RATIO` if resistors differ. Remaining: dims/weight check + wiring dress + aesthetics (Cat 5)
+3. **Phase 2**: bring-up + sensor calibration (±10% target) — user-deferred, highest-value work left
+4. **Phase 3**: bench FSM test (`ENABLE_AUTONOMOUS 1`, wheels off ground, hand-trigger sensors)
+5. **Phase 5**: webapp LIVE at `envirobot.yerielph.workers.dev` (2026-07-09). Remaining: `sync-code.mjs --push` re-seed (redacted), clear stale `docs_pages` rows, retire old Pages project
+6. `/viz` against a real robot-produced `results.json`; Emil design review; full code review; graphify update
 
 ## Key facts (context restoration)
 
-- Frozen JSON schema: `run_id, total_duration_s, sectors_completed, path[]{t_s,x_mm,y_mm}, samples[]{id,type,sector,terrain,value_ntu,value_pct,t_s}` — nulls explicit
+- Frozen JSON schema: `run_id, total_duration_s, sectors_completed, path[]{t_s,x_mm,y_mm}, samples[]{id,type,sector,terrain,value_ntu,value_pct,t_s}` — nulls explicit; clock starts at `startRun()`, not boot
 - Servo: 0° water · 90° neutral · 180° soil
-- RC: `POST /rc {cmd: FWD|BWD|LEFT|RIGHT|STOP[,speed]} | {cmd: SAMPLE_WATER|SAMPLE_SOIL, sector:1-4} | {cmd: END_RUN}` · `GET /data`
-- Deploy: `npx @cloudflare/next-on-pages` → `wrangler pages deploy .vercel/output/static --project-name envirobot` (never Vercel)
+- RC protocol: see project CLAUDE.md §RC Commands (FWD/BWD/LEFT/RIGHT/STOP, SAMPLE_*, CAL_*, START, REZERO, END_RUN) · `GET /data` · `GET /samples` (live_plot feed) · `GET /pos` (x/y/h/t/ip)
+- Deploy: `cd webapp; npm run deploy` — OpenNext + Wrangler to Workers, live at `envirobot.yerielph.workers.dev` (never Vercel, old Pages command dead since 2026-07-08)
+- Judged data output: `arduino/tools/live_plot.py` (matplotlib table + labelled charts + samples.csv); serial `[SAMPLE] S<n> <TYPE> <value>` lines are the parse format — keep shape
 - Scoring: Cat 6 presentation 40 · Cat 1 measurement 30 · rest 30 — rulebook contradicts itself, confirmation pending
 - Fonts: Syne / IBM Plex Sans / JetBrains Mono

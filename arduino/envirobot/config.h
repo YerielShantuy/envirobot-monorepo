@@ -1,64 +1,50 @@
 #pragma once
 
-// ── Motor pins ──────────────────────────────────────────────────
-// GPIO 21/22 are reserved for I2C (MPU6050, TCS34725, VL53L0X) —
-// never assign them to motors.
-#define PIN_MOTOR_L_FWD  13
-#define PIN_MOTOR_L_BWD  14
-#define PIN_MOTOR_L_PWM  4
-#define PIN_MOTOR_R_FWD  18
-#define PIN_MOTOR_R_BWD  19
-#define PIN_MOTOR_R_PWM  23
+#include "hardware_pins.h"
+#include "robot_config.h"
 
-// ── I2C buses ────────────────────────────────────────────────────
-// Bus 0: MPU6050 (0x68) + TCS34725 (0x29)
-#define PIN_I2C_SDA  21
-#define PIN_I2C_SCL  22
-// Bus 1: VL53L0X — ALSO 0x29, clashes with TCS34725, so it gets its
-// own bus (replaces the TCA9548A mux from the original BOM)
-#define PIN_I2C2_SDA 16
-#define PIN_I2C2_SCL 17
+// ── WiFi ────────────────────────────────────────────────────────
+// STA-only: the robot JOINS your phone hotspot. Control, live data and cloud
+// upload all run over that one LAN — no dual radio, no channel conflict.
+// Reach it at http://envirobot.local or the IP printed on serial at boot.
+// Creds below are FIRST-BOOT DEFAULTS only — runtime-editable at /wifi and
+// persisted to SPIFFS /wifi.json, so changing hotspot needs no reflash.
+// If STA can't join at boot, the robot falls back to a provisioning softAP
+// (WIFI_SSID/WIFI_PASS) so /wifi stays reachable — a bad cred never bricks it.
+// Cloud upload stays PRACTICE/DEMO ONLY (rulebook §4.6); serial sample lines
+// remain the legal output for scored runs.
+#define WIFI_STA_SSID "Yer"                                     // default hotspot name (editable at /wifi)
+#define WIFI_STA_PASS "yerielkeren"                             // default hotspot password (editable at /wifi)
+#define WIFI_SSID "RobotAP"                                     // provisioning-AP SSID (STA-fail fallback)
+#define WIFI_PASS "enviro123"                                   // provisioning-AP password (8+ chars)
+#define UPLOAD_URL "https://envirobot.yerielph.workers.dev/api/viz-runs" // deployed webapp (Workers)
 
-// ── Servo ───────────────────────────────────────────────────────
-#define PIN_SERVO        26
-#define SERVO_NEUTRAL    90   // both arms up (travel)
-#define SERVO_WATER       0   // Arm A down — turbidity probe
-#define SERVO_SOIL      180   // Arm B down — soil probe
+// ── Motion model timing ───────────────────────────────────────────
+#define POS_UPDATE_MS 20
 
-// ── Sensors ─────────────────────────────────────────────────────
-#define PIN_TURBIDITY    36   // ADC1 — SEN0189 via voltage divider (see ratio below)
-#define PIN_SOIL_SENSE   39   // ADC1 — capacitive soil analogue
+// ── Motor braking ─────────────────────────────────────────────────
+// On release, pulse an active short-brake (both motor terminals shorted) then
+// coast-off — stops FWD/BWD dead instead of coasting on momentum. Tune to your
+// driver + robot mass; 0 = disable (revert to plain coast). Requires a driver
+// that short-brakes on both direction pins HIGH (TB6612 / L298N / DRV8833).
+#define BRAKE_MS 80
 
-// SEN0189 outputs up to ~4.5V at 5V supply — MUST pass through a
-// voltage divider before the ESP32 ADC (3.3V max). Set the ratio to
-// (R_top + R_bottom) / R_bottom, e.g. 10k/10k → 2.0
-#define TURBIDITY_DIVIDER_RATIO  2.0f
+// ── Sensor sampling ────────────────────────────────────────────────
+#define SAMPLE_TICK_MS 50     // one reading per tick, median reported
+#define SENSOR_SAMPLES 10     // ADC averages per tick
 
-// ── WiFi AP ─────────────────────────────────────────────────────
-#define WIFI_SSID  "RobotAP"
-#define WIFI_PASS  "enviro123"
+// ── Build mode ───────────────────────────────────────────────────
+// 0 = RC-only build: autonomous FSM compiled out, robot always boots in
+//     remote-control mode. This is the competition-default (RC-first).
+// 1 = enable autonomous FSM (stretch goal). Hold BOOT at power-up for RC.
+#define ENABLE_AUTONOMOUS 0
 
-// ── Motion model (no encoders — speed-model position estimate) ──
-// ponytail: calibrate MM_PER_SEC by driving 1m on arena surface and timing it
-#define MM_PER_SEC_AT_DRIVE   150.0f  // forward speed at DRIVE_SPEED PWM
-#define POS_UPDATE_MS         20
-
-// ── Sensor calibration ───────────────────────────────────────────
-#define SOIL_DRY_VAL        2850
-#define SOIL_WET_VAL        1200
-#define SAMPLE_SETTLE_MS    500    // ms after servo deploy before reading
-#define SENSOR_SAMPLES      10     // ADC averages per reading
-
-// ── Zone detection (TCS34725) — calibrate on the real arena ─────
-#define WATER_CLEAR_MIN     800    // clear channel above this AND
-#define WATER_RED_RATIO_MAX 0.40f  // low red ratio → blue water
-#define SOIL_RED_RATIO_MIN  0.45f
-#define SOIL_BLUE_RATIO_MAX 0.20f
-
-// ── Autonomous driving ───────────────────────────────────────────
-#define DRIVE_SPEED           180  // PWM 0-255
-#define TURN_SPEED            140
-#define WALL_STOP_MM          120  // VL53L0X: stop this far from wall
-#define RUN_TIME_LIMIT_MS     (8UL * 60UL * 1000UL)  // hard 8-minute cap
-#define SAMPLE_LOCKOUT_MS     4000 // min driving time between zone detections
-#define POND_BACKOFF_MS       900  // reverse duration after water sample
+// ── Autonomous driving (dead code while ENABLE_AUTONOMOUS == 0) ───
+#define RUN_TIME_LIMIT_MS (8UL * 60UL * 1000UL) // hard 8-minute cap
+#define SAMPLE_LOCKOUT_MS 4000                  // min driving time between zone detections
+#define POND_BACKOFF_MS 900                     // reverse duration after water sample
+#define SAMPLE_CREEP_MS 0                       // fwd nudge after detect so probe tip reaches target; bench-measure TCS→probe offset (0 = off)
+#define SAMPLE_CREEP_SPEED 120                  // PWM for the creep nudge
+#define SWEEP_LEG_TIMEOUT_MS 8000               // no zone/wall event this long → forced new heading (stuck escape; angled walls eat the ultrasonic ping)
+#define SAMPLE_TIME_BUDGET_MS 8000              // don't start a sample without this much run time left (8-min overrun = -5 pts)
+#define SECTOR_MAP {1, 2, 3, 4}                 // dead-reckoned quadrant (+x+y, -x+y, -x-y, +x-y) → sector number; confirm mapping on Testing Day

@@ -6,6 +6,7 @@
 <title>EnviroBot RC</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); }
 body {
   background: #060912; color: #F0F4FF;
   font-family: system-ui, -apple-system, sans-serif;
@@ -23,16 +24,43 @@ header {
 }
 #logo { color: #F0F4FF; }
 #logo span { color: #00D4AA; }
-#status { font-size: 11px; color: #4A5880; transition: color 300ms; }
+#status {
+  font-size: 12px; color: #8899BB; transition: color 300ms;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+#status::before {   /* dot inherits currentColor — connecting/ok/err all read at a glance */
+  content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+}
 #status.ok  { color: #00D4AA; }
 #status.err { color: #EF9A9A; }
+.head-right { display: flex; align-items: center; gap: 14px; }
+a.diag { color: #8899BB; text-decoration: none; font-size: 12px; }
+a.diag:active { color: #00D4AA; }
+
+#posbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 20px;
+  font-family: ui-monospace, monospace; font-size: 11px; color: #4A5880;
+  background: #0A0E1A; border-bottom: 1px solid #1F2D45;
+}
+#posbar b { color: #00D4AA; font-weight: 500; }
+#runT { font-size: 13px; }   /* 8-min cap is the highest-stakes number — enlarge */
+#posbar b.warn { color: #F59E0B; }  /* ≥7:00 — wrap up */
+#posbar b.over { color: #EF4444; }  /* ≥8:00 — overrun, −5 pts */
 
 main {
-  flex: 1; display: flex; flex-direction: column;
-  align-items: center; justify-content: space-evenly;
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: safe center;
   padding: 16px 20px;
-  gap: 12px;
+  gap: 14px;
+  overflow-y: auto;
+  touch-action: pan-y;   /* page scrolls (cal panel); d-pad opts back out */
 }
+/* Cal opening scrolls main — it must NOT shrink the log (default flex-shrink:1).
+   `safe center` keeps the layout centred when it fits, top-aligned+scrollable when it doesn't. */
+main > * { flex-shrink: 0; }
+.dpad { touch-action: none; }
 
 /* ── D-Pad ── */
 .dpad {
@@ -44,9 +72,9 @@ main {
 }
 .btn {
   display: flex; align-items: center; justify-content: center;
-  border-radius: 16px; font-size: 24px; cursor: pointer;
+  border-radius: 16px; font: inherit; font-size: 24px; color: inherit; cursor: pointer;
   background: #111827; border: 1px solid #1F2D45;
-  transition: transform 80ms, background 80ms;
+  transition: transform 80ms var(--ease-out), background 80ms var(--ease-out);
   -webkit-tap-highlight-color: transparent;
 }
 .btn:active { transform: scale(0.92); background: #1A2235; }
@@ -65,10 +93,10 @@ main {
 .sectors { display: flex; gap: 6px; align-items: center; }
 .sectors .label { font-size: 11px; color: #4A5880; letter-spacing: 0.08em; margin-right: 4px; }
 .sector-btn {
-  width: 44px; height: 38px; border-radius: 10px;
+  width: 44px; height: 44px; border-radius: 10px;
   background: #111827; border: 1px solid #1F2D45; color: #8899BB;
   font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
-  transition: transform 80ms, background 80ms, border-color 80ms;
+  transition: transform 80ms var(--ease-out), background 80ms var(--ease-out), border-color 80ms var(--ease-out);
   -webkit-tap-highlight-color: transparent;
 }
 .sector-btn:active { transform: scale(0.94); }
@@ -84,14 +112,30 @@ main {
   padding: 14px 22px; border-radius: 14px;
   font-family: inherit; font-size: 13px; font-weight: 600;
   letter-spacing: 0.06em; cursor: pointer; border: 1px solid;
-  transition: transform 80ms, opacity 150ms;
+  transition: transform 80ms var(--ease-out), opacity 150ms;
   -webkit-tap-highlight-color: transparent;
 }
 .sample-btn:active { transform: scale(0.94); }
+a.sample-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .sample-btn.loading { opacity: 0.55; pointer-events: none; }
 .water-btn { background: rgba(2,119,189,0.12); border-color: rgba(2,119,189,0.4); color: #4FC3F7; }
 .soil-btn  { background: rgba(141,78,18,0.12); border-color: rgba(141,78,18,0.4);  color: #BCAAA4; }
 .end-btn   { background: rgba(245,158,11,0.10); border-color: rgba(245,158,11,0.4); color: #F5C36B; }
+
+/* ── Compact re-zero ── */
+.rezero { display: flex; gap: 8px; align-items: center; font-size: 11px; color: #4A5880; }
+.rezero input {
+  width: 70px; padding: 6px 8px; border-radius: 8px;
+  background: #111827; border: 1px solid #1F2D45; color: #F0F4FF; font: inherit; font-size: 12px;
+}
+.rz-btn {
+  padding: 8px 12px; border-radius: 10px;
+  background: #111827; border: 1px solid #1F2D45; color: #8899BB;
+  font: inherit; font-size: 12px; cursor: pointer;
+  transition: transform 80ms var(--ease-out), background 80ms var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
+}
+.rz-btn:active { transform: scale(0.94); background: #1A2235; }
 
 /* ── Log ── */
 #log {
@@ -99,28 +143,44 @@ main {
   overflow-y: auto; font-size: 11px;
   padding: 8px 12px; border-radius: 10px;
   background: #0D1420; border: 1px solid #1F2D45;
-  scroll-behavior: smooth;
 }
-.log-line        { padding: 1px 0; color: #4A5880; }
+.log-line        { padding: 1px 0; color: #8899BB; }
 .log-line.water  { color: #4FC3F7; }
 .log-line.soil   { color: #BCAAA4; }
 .log-line.error  { color: #EF9A9A; }
+
+/* Reduced motion: kill movement, keep colour/opacity cues */
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 1ms !important; }
+  .btn:active, .sample-btn:active, .sector-btn:active { transform: none; }
+}
 </style>
 </head>
 <body>
 <header>
   <span id="logo">ENVIRO<span>BOT</span> RC</span>
-  <span id="status">connecting…</span>
+  <span class="head-right">
+    <span id="status">connecting…</span>
+    <a class="diag" href="/view">📊 Data</a>
+    <a class="diag" href="/wifi">⚙ WiFi</a>
+    <a class="diag" href="/test">🔧 Diag</a>
+  </span>
 </header>
+
+<!-- Live dead-reckoned position + run clock + hotspot IP (STA) -->
+<div id="posbar">
+  <span>x <b id="posX">0</b>mm · y <b id="posY">0</b>mm · h <b id="posH">0</b>° · ⏱ <b id="runT">--:--</b></span>
+  <span id="staip">no hotspot</span>
+</div>
 
 <main>
   <!-- D-pad -->
   <div class="dpad" aria-label="Drive controls">
-    <div class="btn" data-cmd="FWD"   aria-label="Forward">▲</div>
-    <div class="btn" data-cmd="LEFT"  aria-label="Left">◀</div>
-    <div class="btn" data-cmd="STOP"  aria-label="Stop">■</div>
-    <div class="btn" data-cmd="RIGHT" aria-label="Right">▶</div>
-    <div class="btn" data-cmd="BWD"   aria-label="Backward">▼</div>
+    <button class="btn" data-cmd="FWD"   aria-label="Forward">▲</button>
+    <button class="btn" data-cmd="LEFT"  aria-label="Left">◀</button>
+    <button class="btn" data-cmd="STOP"  aria-label="Stop">■</button>
+    <button class="btn" data-cmd="RIGHT" aria-label="Right">▶</button>
+    <button class="btn" data-cmd="BWD"   aria-label="Backward">▼</button>
   </div>
 
   <!-- Sector selector — tag samples with the sector the robot is in -->
@@ -136,7 +196,16 @@ main {
   <div class="samples">
     <button class="sample-btn water-btn" id="btnWater">💧 Sample Water</button>
     <button class="sample-btn soil-btn"  id="btnSoil">🌱 Sample Soil</button>
+    <button class="sample-btn end-btn"   id="btnStart">▶ Start Auto</button>
     <button class="sample-btn end-btn"   id="btnEnd">🏁 End Run</button>
+    <!-- Native same-origin download — grabs the full run JSON from /data -->
+    <a class="sample-btn end-btn" id="btnDownload" href="/data" download="envirobot_run.json" role="button">⬇ Download JSON</a>
+  </div>
+
+  <!-- Compact re-zero — officials re-centre a stuck robot mid-run (rulebook 5.2.1) -->
+  <div class="rezero">
+    <button class="rz-btn" id="btnRezero">⌖ Re-zero</button>
+    <input id="rezeroH" type="number" value="0" aria-label="heading deg"> ° heading
   </div>
 
   <!-- Log -->
@@ -148,6 +217,7 @@ const statusEl = document.getElementById('status');
 const logEl    = document.getElementById('log');
 let driveTimer = null;
 let sector     = 1;
+let sampling   = false;  // sample cmd blocks the server ~6s — don't flag "offline"
 
 function ts() {
   return new Date().toLocaleTimeString('en', { hour12: false });
@@ -212,7 +282,9 @@ document.querySelectorAll('.sector-btn').forEach(btn => {
 document.getElementById('btnWater').addEventListener('click', async function() {
   this.classList.add('loading');
   this.textContent = '💧 Sampling…';
+  sampling = true;
   const data = await post('SAMPLE_WATER', { sector });
+  sampling = false;
   this.classList.remove('loading');
   this.textContent = '💧 Sample Water';
   if (data) addLog('S' + sector + ' WATER: ' + data.ntu.toFixed(1) + ' NTU', 'water');
@@ -222,28 +294,63 @@ document.getElementById('btnWater').addEventListener('click', async function() {
 document.getElementById('btnSoil').addEventListener('click', async function() {
   this.classList.add('loading');
   this.textContent = '🌱 Sampling…';
+  sampling = true;
   const data = await post('SAMPLE_SOIL', { sector });
+  sampling = false;
   this.classList.remove('loading');
   this.textContent = '🌱 Sample Soil';
   if (data) addLog('S' + sector + ' SOIL: ' + data.pct.toFixed(1) + '%', 'soil');
   else      addLog('Sample failed', 'error');
 });
 
-document.getElementById('btnEnd').addEventListener('click', async function() {
-  const data = await post('END_RUN');
-  if (data) addLog('Run finalised — results.json saved');
-  else      addLog('End run failed', 'error');
+document.getElementById('btnStart').addEventListener('click', async () => {
+  const data = await post('START');
+  if (data) addLog('Autonomous run STARTED');
+  else      addLog('Start failed (RC mode or RC-only build)', 'error');
 });
 
-// ── Heartbeat ────────────────────────────────────────────────────
+document.getElementById('btnEnd').addEventListener('click', async function() {
+  this.classList.add('loading');
+  const data = await post('END_RUN');   // upload can take a few seconds
+  this.classList.remove('loading');
+  if (!data)               addLog('End run failed', 'error');
+  else if (data.uploaded)  addLog('Run saved + uploaded to cloud ☁');
+  else                     addLog('Run saved locally — upload skipped/failed (retry: End Run again)');
+});
+
+const $id = id => document.getElementById(id);
+
+// Compact re-zero — officials re-centre a stuck robot mid-run (rulebook 5.2.1)
+$id('btnRezero').addEventListener('click', async () => {
+  const h = parseFloat($id('rezeroH').value) || 0;
+  const data = await post('REZERO', { h });
+  addLog(data ? 'Pose re-zeroed, heading ' + h + '°' : 'Re-zero failed', data ? '' : 'error');
+});
+
+// ── Position poll + heartbeat (2Hz) ──────────────────────────────
 setInterval(async () => {
   try {
-    await fetch('/data', { method: 'GET', signal: AbortSignal.timeout(2000) });
+    const r = await fetch('/pos', { method: 'GET', signal: AbortSignal.timeout(1500) });
+    const p = await r.json();
+    $id('posX').textContent = Math.round(p.x);
+    $id('posY').textContent = Math.round(p.y);
+    $id('posH').textContent = p.h.toFixed(0);
+    // Run clock — starts on first drive/sample. 8-min limit is on the
+    // operator in RC mode: amber at 7:00, red at 8:00 (−5 pts overrun).
+    const t = p.t || 0;
+    const rt = $id('runT');
+    rt.textContent = t > 0
+      ? Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0')
+      : '--:--';
+    rt.className = t >= 480 ? 'over' : t >= 420 ? 'warn' : '';
+    $id('staip').textContent = p.ip ? 'STA ' + p.ip : 'no hotspot';
     statusEl.textContent = 'connected'; statusEl.className = 'ok';
   } catch {
-    statusEl.textContent = 'offline'; statusEl.className = 'err';
+    // Sample cmds block the single-threaded server ~6s — a missed poll
+    // during one is expected, not a disconnect.
+    if (!sampling) { statusEl.textContent = 'offline'; statusEl.className = 'err'; }
   }
-}, 4000);
+}, 500);
 </script>
 </body>
 </html>

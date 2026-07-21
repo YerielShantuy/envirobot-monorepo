@@ -15,16 +15,16 @@ void initServo() {
 }
 
 void armNeutral() {
-  srv.write(SERVO_NEUTRAL);
+  srv.write(config.servoNeutral);
   delay(600);
 }
 
 void armDeployWater() {
-  srv.write(SERVO_WATER);
-  delay(SAMPLE_SETTLE_MS);
+  srv.write(config.servoWater);
+  delay(config.sampleSettleMs);
 }
 
 void armDeploySoil() {
-  srv.write(SERVO_SOIL);
-  delay(SAMPLE_SETTLE_MS);
+  srv.write(config.servoSoil);
+  delay(config.sampleSettleMs);
 }

@@ -2,13 +2,12 @@
 #include <Arduino.h>
 
 void   initDataLogger();
-void   startRun();        // reset doc + start run clock: first RC drive/sample, or autonomous START
+void   startRun();        // reset doc + start run clock: first RC drive/sample after boot or END_RUN
 bool   runLive();         // true between startRun() and finaliseRun()
 bool   isRunActive();     // same flag — config editor / cal wizard lockout
 float  runElapsedS();     // seconds since startRun (0 when not live)
 void   logPathPoint();
-// sector: 1-4 (0 = unknown). RC mode passes the operator-selected sector;
-// autonomous mode passes a dead-reckoned quadrant estimate (SECTOR_MAP).
+// sector: 1-4 (0 = unknown) — the operator-selected sector from the RC page.
 void   logSample(const char* type, float ntu, float pct, int sector);
 void   finaliseRun();
 String getRunJSON();

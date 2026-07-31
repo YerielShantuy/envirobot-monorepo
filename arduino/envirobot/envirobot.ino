@@ -2,12 +2,14 @@
  * EnviroBot — Environmental Survey Robot
  * ESP32 DevKit v1
  *
- * Build mode set by ENABLE_AUTONOMOUS in config.h:
- *   0 (default) → RC-only: always boots in remote-control mode.
- *   1           → hold BOOT at power-up for RC, else autonomous FSM.
+ * Remote control only. There is no autonomous mode: every motion comes from
+ * an operator tap on the RC page. An HC-SR04 collision guard cuts forward
+ * drive when something sits inside config.obstacleStopMm.
  *
- * WiFi AP + web server run in BOTH modes so judges can always pull
- * /data immediately after a run (rulebook 5.2.1.3).
+ * WiFi is AP-only — the robot IS the network ("RobotAP", http://192.168.4.1).
+ * No router, no hotspot, no cloud. Run data leaves as a downloaded
+ * results.json (⬇ Download JSON → GET /data) for webapp playback; serial
+ * sample lines stay the rulebook-approved output (§4.6).
  */
 #include "config.h"
 #include "config_store.h"
@@ -20,20 +22,11 @@
 #include <SPIFFS.h>
 
 RobotConfiguration config;
-static bool rcMode = false;
 
 void setup() {
   Serial.begin(115200);
 
-  // Boot button on GPIO0 — hold for RC mode
-  pinMode(0, INPUT_PULLUP);
-#if ENABLE_AUTONOMOUS
-  rcMode = (digitalRead(0) == LOW);
-#else
-  rcMode = true;   // RC-only build — autonomous FSM compiled out
-#endif
-
-  // LED on GPIO2
+  // LED on GPIO2 — solid = ready
   pinMode(2, OUTPUT);
 
   if (!SPIFFS.begin(true)) {
@@ -49,25 +42,13 @@ void setup() {
 
   startWiFiAP();
   startWebServer();
-  setServerRCMode(rcMode);
 
-  if (rcMode) {
-    Serial.println("[MODE] RC");
-    digitalWrite(2, HIGH);
-  }
-#if ENABLE_AUTONOMOUS
-  else {
-    Serial.println("[MODE] AUTO");
-    initNavigation();
-  }
-#endif
+  Serial.println("[MODE] RC");
+  digitalWrite(2, HIGH);
 }
 
 void loop() {
   handleWebServer();
   updatePosition();
   logPathPoint();
-#if ENABLE_AUTONOMOUS
-  if (!rcMode) runFSM();
-#endif
 }

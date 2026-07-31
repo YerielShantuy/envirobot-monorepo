@@ -81,6 +81,8 @@ td.w { color: var(--water); } td.s { color: var(--soil); }
   </div>
   <span class="head-right">
     <span id="status">connecting…</span>
+    <!-- Only route off the robot for run data — drop this file into the webapp /viz -->
+    <a class="nav" href="/data" download="envirobot_run.json">⬇ JSON</a>
     <a class="nav" href="/">← RC</a>
     <a class="nav" href="/test">🔧 Diag</a>
   </span>
@@ -131,13 +133,8 @@ function addLog(text, cls) {
 }
 
 // ── Arena (ported from webapp lib/arena.ts, vanilla + live: shows all-up-to-now) ──
-const ARENA_RADIUS_MM = 750;   // rulebook §5.1: ~1.5 m diameter
-function octagonPoints(cx, cy, r) {
-  return Array.from({ length: 8 }, (_, i) => {
-    const a = (Math.PI / 4) * i - Math.PI / 8;
-    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
-  });
-}
+// 1500mm square, origin = centre → 750mm half-extent on each axis.
+const ARENA_HALF_MM = 750;
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
@@ -149,34 +146,34 @@ function drawArena(ctx, data) {
   const w = ctx.canvas.width, h = ctx.canvas.height;
   const cx = w / 2, cy = h / 2;
   const S = Math.min(w, h);
-  const scale = (S * 0.42) / ARENA_RADIUS_MM;   // mm -> px
-  const off = S * 0.178;                          // sector-label centroid offset
+  const half = S * 0.44;                     // drawn half-side, px
+  const scale = half / ARENA_HALF_MM;        // mm -> px
+  const off = half / 2;                      // square quadrant centroid = 375mm from centre
 
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = '#0A0E1A'; ctx.fillRect(0, 0, w, h);
 
-  const pts = octagonPoints(cx, cy, S * 0.44);
-  const trace = () => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); };
+  const x0 = cx - half, y0 = cy - half, side = half * 2;
+  ctx.fillStyle = '#0F1621'; ctx.fillRect(x0, y0, side, side);
 
-  trace(); ctx.fillStyle = '#0F1621'; ctx.fill();
-
-  // Sector quadrant fills + dividers, clipped to octagon
-  const sectorColors = ['rgba(196,168,130,0.22)', 'rgba(74,44,23,0.28)', 'rgba(45,90,27,0.28)', 'rgba(212,180,131,0.20)'];
-  const quads = [[0, 0, cx, cy], [cx, 0, w, cy], [0, cy, cx, h], [cx, cy, w, h]];
-  ctx.save(); trace(); ctx.clip();
+  // Four 750x750mm terrain quadrant fills + centre-line dividers
+  const sectorColors = ['rgba(92,96,104,0.22)', 'rgba(74,124,63,0.28)', 'rgba(201,168,107,0.24)', 'rgba(154,160,168,0.20)'];
+  const quads = [[x0, y0, cx, cy], [cx, y0, cx + half, cy], [x0, cy, cx, cy + half], [cx, cy, cx + half, cy + half]];
   sectorColors.forEach((c, i) => { const [x1, y1, x2, y2] = quads[i]; ctx.fillStyle = c; ctx.fillRect(x1, y1, x2 - x1, y2 - y1); });
   ctx.strokeStyle = 'rgba(136,153,187,0.28)'; ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
-  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
-  ctx.setLineDash([]); ctx.restore();
+  ctx.beginPath();
+  ctx.moveTo(cx, y0); ctx.lineTo(cx, y0 + side);
+  ctx.moveTo(x0, cy); ctx.lineTo(x0 + side, cy);
+  ctx.stroke(); ctx.setLineDash([]);
 
-  trace(); ctx.strokeStyle = '#2A3E5E'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.strokeStyle = '#2A3E5E'; ctx.lineWidth = 2; ctx.strokeRect(x0, y0, side, side);
 
   // Sector labels
   const sectors = [
-    { label: 'SANDPAPER', num: 'S1', x: cx - off, y: cy - off },
-    { label: 'WET SOIL',  num: 'S2', x: cx + off, y: cy - off },
-    { label: 'GRASS',     num: 'S3', x: cx - off, y: cy + off },
-    { label: 'SAND',      num: 'S4', x: cx + off, y: cy + off },
+    { label: 'URBAN',  num: 'S1', x: cx - off, y: cy - off },
+    { label: 'FIELD',  num: 'S2', x: cx + off, y: cy - off },
+    { label: 'DESERT', num: 'S3', x: cx - off, y: cy + off },
+    { label: 'STONE',  num: 'S4', x: cx + off, y: cy + off },
   ];
   ctx.textAlign = 'center';
   sectors.forEach(({ label, num, x, y }) => {
@@ -298,6 +295,15 @@ async function seed() {
 setInterval(async () => {
   try {
     const p = await fetch('/pos', { signal: AbortSignal.timeout(1500) }).then(r => r.json());
+    // Run clock re-zeroed = a new run started, so anything seeded from /data
+    // is the previous run. Sample ids repeat across runs (W1/S1), so a stale
+    // seenIds makes the samples poller skip every real sample. t == 0 means
+    // "not live" (idle / after END_RUN) and must never clear a finished run.
+    if (p.t > 0 && (run.total_duration_s === 0 || p.t < run.total_duration_s)) {
+      run.path = []; run.samples = []; seenIds.clear();
+      addLog('New run — cleared previous run data');
+      render();
+    }
     // append live waypoint (t strictly increasing while a run is live)
     const npts = run.path.length;
     if (!npts || run.path[npts - 1].t_s !== p.t) run.path.push({ t_s: p.t, x_mm: p.x, y_mm: p.y });

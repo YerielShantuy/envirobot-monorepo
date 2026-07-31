@@ -1,5 +1,6 @@
 #include "wifi_server.h"
 #include "config.h"
+#include "collision.h"
 #include "config_store.h"
 #include "navigation.h"
 #include "servo_arm.h"
@@ -9,17 +10,13 @@
 #include "rc_page.h"
 #include "test_page.h"
 #include "data_page.h"
-#include <Wire.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
 
 static WebServer server(80);
-static bool g_rcMode = true;
 // Dead-man: RC page repeats the drive cmd every 120ms while held.
 // If WiFi drops mid-hold, stop rather than drive blind into a wall/pond.
 static bool driving = false;
@@ -30,133 +27,37 @@ static unsigned long lastDriveMs = 0;
 static bool calActive = false;
 static unsigned long calStopMs = 0;
 
-void setServerRCMode(bool rc) { g_rcMode = rc; }
+// ── Collision guard (HC-SR04) ────────────────────────────────────
+// Polled at OBSTACLE_PING_MS in handleWebServer(). When something sits
+// closer than config.obstacleStopMm for OBSTACLE_TRIP_HITS consecutive
+// pings, the motors are cut and forward drive is refused until the reading
+// clears by OBSTACLE_HYST_MM. Reverse and both turns stay available — a
+// guard that also blocks escaping leaves the robot stranded, which costs
+// more than the collision would.
+// Optional: config.collisionGuardOn switches the intervention off. Pings keep
+// running either way so the distance readout and calibration still work —
+// only the motor cut and the FWD refusal are gated.
+// Debounce/hysteresis state machine lives in collision.h (host-tested by
+// tools/test_collision.cpp); this file owns the ping timing and the motor cut.
+static float    obstacleMm      = 8190.0f;  // last ping, mm (8190 = nothing in range)
+static bool     obstacleBlocked = false;
+static ObstacleGuard obstacleGuard;
+static unsigned long lastPingMs = 0;
 
-// ── WiFi credential store ────────────────────────────────────────
-// Runtime-editable hotspot creds. Seeded from the config.h defaults on first
-// boot, persisted to SPIFFS /wifi.json, edited live via GET/POST /wifi —
-// changing hotspot never needs a reflash.
-static char g_ssid[33] = WIFI_STA_SSID;
-static char g_pass[64] = WIFI_STA_PASS;
-static bool g_apMode = false;             // true = STA failed, running BACKUP softAP (no STA, no cloud)
-static bool g_reconnectPending = false;   // POST /wifi -> reconnect after the reply flushes
-
-static void loadWiFiCreds() {
-  File f = SPIFFS.open("/wifi.json", FILE_READ);
-  if (!f) return;                          // no file yet — keep compiled-in defaults
-  StaticJsonDocument<192> doc;
-  DeserializationError err = deserializeJson(doc, f);
-  f.close();
-  if (err) { Serial.println("[WiFi] /wifi.json bad json — using defaults"); return; }
-  const char* s = doc["ssid"] | "";
-  if (s[0]) {                              // only override if the stored ssid is non-empty
-    strlcpy(g_ssid, s, sizeof(g_ssid));
-    strlcpy(g_pass, doc["pass"] | "", sizeof(g_pass));
-  }
-}
-
-static void saveWiFiCreds() {
-  StaticJsonDocument<192> doc;
-  doc["ssid"] = g_ssid;
-  doc["pass"] = g_pass;
-  File f = SPIFFS.open("/wifi.json", FILE_WRITE);
-  if (!f) { Serial.println("[WiFi] /wifi.json write failed"); return; }
-  serializeJson(doc, f);
-  f.close();
-}
-
-// Join the hotspot as STA (control + live data + cloud all over that one LAN).
-// One radio = one role: on failure, fall back to a BACKUP softAP so /wifi stays
-// reachable and RC still works — a wrong password never locks you out. In that
-// backup AP there is no STA and cloud upload is disabled (g_apMode).
-static bool connectSTA() {
-  g_apMode = false;
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);                    // no modem sleep — keeps control latency low
-  WiFi.begin(g_ssid, g_pass);
-  Serial.printf("[WiFi] joining \"%s\" ", g_ssid);
-  unsigned long t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) { delay(250); Serial.print("."); }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("\n[WiFi] STA IP: ");
-    Serial.println(WiFi.localIP());
-    Serial.println("[WiFi] open http://envirobot.local or the IP above");
-    return true;
-  }
-  // Backup AP — provisioning + RC fallback, no STA, cloud disabled.
+void startWiFiAP() {
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(WIFI_SSID, WIFI_PASS, 1);
-  g_apMode = true;
-  Serial.print("\n[WiFi] STA join failed — BACKUP AP \"");
+  WiFi.softAP(WIFI_SSID, WIFI_PASS, WIFI_AP_CHANNEL);
+  WiFi.setSleep(false);            // no modem sleep — keeps RC latency low
+  Serial.print("[WiFi] AP \"");
   Serial.print(WIFI_SSID);
   Serial.print("\" up at http://");
-  Serial.print(WiFi.softAPIP());
-  Serial.println("/wifi — fix hotspot creds there (cloud upload off in AP mode)");
-  return false;
-}
-
-// Name kept (called from envirobot.ino). STA-first; backup AP only on failure.
-void startWiFiAP() {
-  loadWiFiCreds();
-  connectSTA();
+  Serial.println(WiFi.softAPIP());
   if (MDNS.begin("envirobot")) MDNS.addService("http", "tcp", 80);
-}
-
-// POST results.json to the webapp (existing public /api/viz-runs route —
-// run appears in the /viz list). PRACTICE/DEMO ONLY per rulebook §4.6;
-// serial sample lines remain the approved output for scored runs.
-static bool uploadResults() {
-  // STA is already up (robot lives on the hotspot) → upload is a plain POST.
-  // Backup AP mode has no internet, so cloud is disabled there.
-  if (g_apMode) {
-    Serial.println("[UPLOAD] backup AP mode — cloud disabled (data safe in SPIFFS)");
-    return false;
-  }
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[UPLOAD] not on hotspot — skipped (data safe in SPIFFS)");
-    return false;
-  }
-  File f = SPIFFS.open("/data/results.json", FILE_READ);
-  if (!f || f.size() == 0) {
-    Serial.println("[UPLOAD] results.json missing");
-    return false;
-  }
-  WiFiClientSecure client;
-  client.setInsecure();  // ponytail: telemetry to a public endpoint — pin ISRG root if this ever carries secrets
-  HTTPClient https;
-  if (!https.begin(client, UPLOAD_URL)) { f.close(); return false; }
-  https.addHeader("Content-Type", "application/json");
-  https.setTimeout(10000);
-  // Stream straight from SPIFFS — avoids a 48KB String copy next to TLS buffers
-  int code = https.sendRequest("POST", &f, f.size());
-  f.close();
-  https.end();
-  Serial.printf("[UPLOAD] HTTP %d, free heap %u\n", code, ESP.getFreeHeap());
-  return code >= 200 && code < 300;
 }
 
 static void sendJSON(int code, const String& body) {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.send(code, "application/json", body);
-}
-
-// I2C bus scan — the one self-test with no equivalent already exposed by the
-// sensor modules (ports tests/test_i2c_scan). Wire is already begun by
-// initSensors(), so this must not re-init it.
-static String i2cScan(int* count) {
-  String found;
-  int n = 0;
-  for (uint8_t a = 1; a < 127; a++) {
-    Wire.beginTransmission(a);
-    if (Wire.endTransmission() == 0) {
-      if (n++) found += ",";
-      char hex[8];
-      snprintf(hex, sizeof(hex), "0x%02X", a);
-      found += hex;
-    }
-  }
-  *count = n;
-  return found;
 }
 
 void startWebServer() {
@@ -178,9 +79,9 @@ void startWebServer() {
 
   // ── Self-tests ──────────────────────────────────────────────────
   // tests/*.ino ported onto the live firmware so they run from the phone.
-  // Refused during a scored run (would burn run clock / pollute samples) and
-  // in autonomous mode (FSM owns motors). The two motion tests additionally
-  // require {"armed":true} from the on-blocks toggle.
+  // Refused during a scored run (would burn run clock / pollute samples).
+  // The two motion tests additionally require {"armed":true} from the
+  // on-blocks toggle.
   server.on("/selftest", HTTP_POST, []() {
     if (!server.hasArg("plain")) { sendJSON(400, "{\"error\":\"no body\"}"); return; }
 
@@ -193,38 +94,31 @@ void startWebServer() {
     bool armed       = req["armed"] | false;
 
     if (runLive()) { sendJSON(409, "{\"error\":\"run in progress - End Run first\"}"); return; }
-    if (!g_rcMode) { sendJSON(409, "{\"error\":\"autonomous mode - self-tests are RC-only\"}"); return; }
 
     bool ok = false;
     String value;
 
     if (strcmp(test, "turbidity") == 0) {
-      float ntu = readTurbidityNTU();
+      float raw = 0.0f;
+      float ntu = readTurbidityNTU(&raw);
+      float v   = raw * (3.3f / 4095.0f) * TURBIDITY_DIVIDER_RATIO;
       ok    = ntu >= 0.0f && ntu <= 4000.0f;
-      value = String(ntu, 1) + " NTU";
+      // Raw + volts alongside the NTU: the curve clamps to 0 both above 4.20V
+      // (clear water) and below 0.93V (dead/unpowered sensor), and a stale
+      // turbidityZeroRaw offset zeroes everything — the volts tell them apart.
+      // Healthy SEN0189 on 5V sits 2.5-4.2V; anything else means wiring.
+      value = String(ntu, 1) + " NTU (raw " + String(raw, 0)
+            + ", " + String(v, 2) + " V, zero " + String(config.turbidityZeroRaw) + ")";
 
     } else if (strcmp(test, "soil") == 0) {
       float pct = readSoilMoisturePct();
       ok    = pct >= 0.0f && pct <= 100.0f;
       value = String(pct, 1) + " %";
 
-    } else if (strcmp(test, "zones") == 0) {
-      // A read that returns is a pass; both false just means plain floor.
-      bool water = false, soil = false;
-      readZones(&water, &soil);
-      ok    = true;
-      value = String("water:") + (water ? "1" : "0") + " soil:" + (soil ? "1" : "0");
-
-    } else if (strcmp(test, "wall") == 0) {
-      float mm = readWallDistanceMM();
-      ok    = mm > 0.0f;   // 0 = pulseIn timed out, no echo
-      value = ok ? String(mm, 0) + " mm" : "no echo";
-
-    } else if (strcmp(test, "i2c") == 0) {
-      int n = 0;
-      String addrs = i2cScan(&n);
-      ok    = addrs.indexOf("0x29") >= 0;   // TCS34725 is the only device on the bus
-      value = n ? addrs + " (" + String(n) + ")" : "no devices";
+    } else if (strcmp(test, "obstacle") == 0) {
+      float mm = readObstacleDistanceMM();
+      ok    = mm > 0.0f && mm < 8190.0f;   // 8190 = pulseIn timed out, no echo
+      value = ok ? String(mm, 0) + " mm (stop at " + String(config.obstacleStopMm) + ")" : "no echo";
 
     } else if (strcmp(test, "motors") == 0) {
       if (!armed) { sendJSON(409, "{\"error\":\"not armed - robot must be on blocks\"}"); return; }
@@ -313,13 +207,11 @@ void startWebServer() {
       float raw = captureRawTurbidity();
       sendJSON(200, "{\"raw\":" + String(raw, 1) + "}");
 
-    } else if (strcmp(target, "color_water") == 0 || strcmp(target, "color_soil") == 0 ||
-               strcmp(target, "color_floor") == 0) {
-      uint16_t r, g, b, c;
-      captureRawColor(&r, &g, &b, &c);
-      char buf[96];
-      snprintf(buf, sizeof(buf), "{\"raw\":{\"r\":%u,\"g\":%u,\"b\":%u,\"c\":%u}}", r, g, b, c);
-      sendJSON(200, buf);
+    } else if (strcmp(target, "obstacle") == 0) {
+      // Collision-threshold capture: one live ping, no settle/median (the
+      // HC-SR04 answers in ms). Operator parks the robot at the distance it
+      // should stop from and reads the number into obstacleStopMm.
+      sendJSON(200, "{\"raw\":" + String(readObstacleDistanceMM(), 1) + "}");
 
     } else {
       sendJSON(400, "{\"error\":\"unknown target\"}");
@@ -340,36 +232,22 @@ void startWebServer() {
     int speed       = req["speed"]  | config.driveSpeed;
     speed = constrain(speed, 0, 255);
 
-    // Autonomous mode: the FSM owns motors and servo. A stray phone tap
-    // must not deploy the arm mid-drive. Only STOP/END_RUN/START/REZERO pass.
-    if (!g_rcMode && strcmp(cmd, "STOP") != 0 && strcmp(cmd, "END_RUN") != 0 &&
-        strcmp(cmd, "START") != 0 && strcmp(cmd, "REZERO") != 0) {
-      sendJSON(409, "{\"error\":\"autonomous mode - only STOP/END_RUN/START/REZERO accepted\"}");
-      return;
-    }
-
-    // RC run clock: first drive/sample after boot (or after END_RUN) opens a
+    // Run clock: first drive/sample after boot (or after END_RUN) opens a
     // fresh run doc — otherwise t_s/total_duration_s count idle time from
     // power-on and the path cap fills before the run starts. CAL_*, STOP and
     // REZERO are bench/setup commands and don't start a run.
-    if (g_rcMode && !runLive() &&
+    if (!runLive() &&
         (strcmp(cmd, "FWD") == 0 || strcmp(cmd, "BWD") == 0 ||
          strcmp(cmd, "LEFT") == 0 || strcmp(cmd, "RIGHT") == 0 ||
          strcmp(cmd, "SAMPLE_WATER") == 0 || strcmp(cmd, "SAMPLE_SOIL") == 0)) {
       startRun();
     }
 
-    if (strcmp(cmd, "START") == 0) {
-#if ENABLE_AUTONOMOUS
-      if (!g_rcMode) {
-        navigationStart();
-        sendJSON(200, "{\"started\":true}");
-      } else {
-        sendJSON(409, "{\"error\":\"RC mode - START is autonomous-only\"}");
-      }
-#else
-      sendJSON(409, "{\"error\":\"autonomous build disabled\"}");
-#endif
+    // Collision guard: refuse anything that drives the robot FORWARD while
+    // an obstacle sits inside config.obstacleStopMm. Reverse/turns pass so
+    // the operator can always back out of the block.
+    if (obstacleBlocked && (strcmp(cmd, "FWD") == 0 || strcmp(cmd, "CAL_FWD") == 0)) {
+      sendJSON(409, "{\"error\":\"obstacle\",\"mm\":" + String(obstacleMm, 0) + "}");
       return;
     }
 
@@ -386,7 +264,7 @@ void startWebServer() {
     }
 
     if (strcmp(cmd, "SAMPLE_WATER") == 0) {
-      driveStop();                 // never move the servo while driving
+      driveBrake(); delay(BRAKE_MS); driveStop();   // never move the servo while driving — brake, don't coast
       driving = false;
       armDeployWater();
       float ntu = readTurbidityNTU();
@@ -397,7 +275,7 @@ void startWebServer() {
       sendJSON(200, "{\"ntu\":" + String(ntu, 1) + "}");
 
     } else if (strcmp(cmd, "SAMPLE_SOIL") == 0) {
-      driveStop();
+      driveBrake(); delay(BRAKE_MS); driveStop();
       driving = false;
       armDeploySoil();
       float pct = readSoilMoisturePct();
@@ -407,13 +285,16 @@ void startWebServer() {
       sendJSON(200, "{\"pct\":" + String(pct, 1) + "}");
 
     } else if (strcmp(cmd, "END_RUN") == 0) {
+      // Finalise + write /data/results.json to SPIFFS. Nothing is uploaded
+      // anywhere — the operator pulls the file with ⬇ Download JSON (GET
+      // /data) and drops it into the webapp visualiser for playback.
       driveStop();
+      armNeutral();      // park the arm — a reset landing mid-sample leaves it deployed
       driving = false;
       calActive = false;
       finaliseRun();
-      Serial.println("[RUN] Finalised — results.json saved");
-      bool up = uploadResults();
-      sendJSON(200, String("{\"saved\":true,\"uploaded\":") + (up ? "true" : "false") + "}");
+      Serial.println("[RUN] Finalised — results.json saved to SPIFFS");
+      sendJSON(200, "{\"saved\":true}");
 
     } else if (strcmp(cmd, "CAL_FWD") == 0 || strcmp(cmd, "CAL_SPIN") == 0) {
       // Timed calibration run — drives at the exact constants the config
@@ -434,50 +315,10 @@ void startWebServer() {
     else sendJSON(400, "{\"error\":\"unknown cmd\"}");
   });
 
-  // ── WiFi provisioning ───────────────────────────────────────────
-  // Runtime-editable hotspot creds — no reflash to switch networks. GET serves
-  // a tiny form (reachable over STA or the backup AP); POST validates,
-  // persists to SPIFFS, and reconnects. Password never echoed back — leave it
-  // blank to keep the current one.
-  server.on("/wifi", HTTP_GET, []() {
-    bool conn = WiFi.status() == WL_CONNECTED;
-    String p; p.reserve(1100);
-    p  = F("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-           "<title>EnviroBot WiFi</title><style>body{font-family:sans-serif;max-width:22rem;"
-           "margin:2rem auto;padding:0 1rem}input{width:100%;padding:.5rem;margin:.3rem 0 1rem;"
-           "box-sizing:border-box}button{padding:.6rem 1rem}</style><h2>EnviroBot WiFi</h2><p>Status: ");
-    p += conn ? F("<b style=color:#2a7>connected</b> ") : F("<b style=color:#c33>backup AP (not on hotspot)</b>");
-    if (conn) p += WiFi.localIP().toString();
-    p += F("</p><form onsubmit=\"event.preventDefault();fetch('/wifi',{method:'POST',headers:"
-           "{'Content-Type':'application/json'},body:JSON.stringify({ssid:ssid.value,pass:pass.value})})"
-           ".then(r=>r.json()).then(j=>msg.textContent=j.error||'Saved - reconnecting, find the robot "
-           "on your hotspot');\"><label>Hotspot name</label><input id=ssid maxlength=32 required value='");
-    p += g_ssid;
-    p += F("'><label>Password</label><input id=pass type=password maxlength=63 placeholder='(blank = "
-           "keep current)'><button>Save &amp; connect</button></form><p id=msg></p>");
-    server.send(200, "text/html", p);
-  });
-
-  server.on("/wifi", HTTP_POST, []() {
-    if (!server.hasArg("plain")) { sendJSON(400, "{\"error\":\"no body\"}"); return; }
-    StaticJsonDocument<192> req;
-    if (deserializeJson(req, server.arg("plain"))) { sendJSON(400, "{\"error\":\"invalid json\"}"); return; }
-    const char* ssid = req["ssid"] | "";
-    const char* pass = req["pass"] | "";
-    size_t sl = strlen(ssid), pl = strlen(pass);
-    if (sl < 1 || sl > 32) { sendJSON(400, "{\"error\":\"ssid must be 1-32 chars\"}"); return; }
-    if (pl > 63)           { sendJSON(400, "{\"error\":\"password too long (max 63)\"}"); return; }
-    if (pl > 0 && pl < 8)  { sendJSON(400, "{\"error\":\"WPA password needs 8+ chars\"}"); return; }
-    strlcpy(g_ssid, ssid, sizeof(g_ssid));
-    if (pl > 0) strlcpy(g_pass, pass, sizeof(g_pass));   // blank keeps the stored password
-    saveWiFiCreds();
-    Serial.printf("[WiFi] creds updated -> \"%s\"\n", g_ssid);
-    sendJSON(200, "{\"ok\":true}");
-    g_reconnectPending = true;                           // reconnect once the reply has flushed
-  });
-
   // ── Download run data ───────────────────────────────────────────
+  // The ⬇ Download JSON button on the RC page points straight here.
   server.on("/data", HTTP_GET, []() {
+    server.sendHeader("Content-Disposition", "attachment; filename=\"envirobot_run.json\"");
     sendJSON(200, getRunJSON());
   });
 
@@ -494,15 +335,19 @@ void startWebServer() {
     server.send(204);
   });
 
-  // Live dead-reckoned position + run clock + STA IP — RC page polls at
-  // ~2Hz (doubles as heartbeat). Heading in degrees, t = run seconds
-  // (0 = run not started; 8-min limit is the operator's job in RC mode).
+  // Live dead-reckoned position + run clock + collision state — RC page
+  // polls at ~2Hz (doubles as heartbeat). Heading in degrees, t = run
+  // seconds (0 = run not started; the 8-min limit is the operator's job),
+  // d = last obstacle ping in mm, blocked = forward drive currently refused,
+  // guard = collision guard switched on (distance is reported either way).
   server.on("/pos", HTTP_GET, []() {
     Position p = getPosition();
-    char buf[128];
-    snprintf(buf, sizeof(buf), "{\"x\":%.0f,\"y\":%.0f,\"h\":%.1f,\"t\":%.0f,\"ip\":\"%s\"}",
+    char buf[176];
+    snprintf(buf, sizeof(buf),
+             "{\"x\":%.0f,\"y\":%.0f,\"h\":%.1f,\"t\":%.0f,\"d\":%.0f,\"blocked\":%s,\"guard\":%s}",
              p.x_mm, p.y_mm, p.heading_rad * 180.0f / (float)M_PI, runElapsedS(),
-             WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "");
+             obstacleMm, obstacleBlocked ? "true" : "false",
+             config.collisionGuardOn ? "true" : "false");
     sendJSON(200, buf);
   });
 
@@ -517,16 +362,46 @@ void startWebServer() {
   Serial.println("[WiFi] WebServer started on port 80");
 }
 
+// One ultrasonic ping per OBSTACLE_PING_MS. Trips only after
+// OBSTACLE_TRIP_HITS consecutive in-range reads (a single HC-SR04 glitch
+// must not halt a run) and clears only once the reading is OBSTACLE_HYST_MM
+// past the threshold (a bare threshold chatters at the boundary).
+static void updateCollisionGuard() {
+  if (millis() - lastPingMs < OBSTACLE_PING_MS) return;
+  lastPingMs = millis();
+  obstacleMm = readObstacleDistanceMM();
+
+  // Guard switched off: keep reporting distance, never intervene. Reset the
+  // debounce so re-enabling starts clean instead of tripping on stale hits.
+  if (!config.collisionGuardOn) {
+    obstacleGuard = ObstacleGuard();
+    if (obstacleBlocked) {
+      obstacleBlocked = false;
+      Serial.println("[COLLISION] guard disabled — forward drive unrestricted");
+    }
+    return;
+  }
+
+  bool blocked = obstacleStep(obstacleGuard, obstacleMm, config.obstacleStopMm,
+                              OBSTACLE_TRIP_HITS, OBSTACLE_HYST_MM);
+  if (blocked && !obstacleBlocked) {
+    // Cut the motors on the trip edge, not every tick — otherwise holding
+    // BWD to escape would be braked 10× a second.
+    driveBrake(); delay(BRAKE_MS); driveStop();
+    driving   = false;
+    calActive = false;
+    Serial.printf("[COLLISION] obstacle at %.0f mm (stop %d mm) — motors cut, reverse to clear\n",
+                  obstacleMm, config.obstacleStopMm);
+  } else if (!blocked && obstacleBlocked) {
+    Serial.println("[COLLISION] clear — forward drive re-enabled");
+  }
+  obstacleBlocked = blocked;
+}
+
 void handleWebServer() {
   server.handleClient();
 
-  // POST /wifi asked for a reconnect — do it here so the HTTP 200 flushes
-  // before the radio drops (reconnecting inside the handler kills the reply).
-  if (g_reconnectPending) {
-    g_reconnectPending = false;
-    delay(150);
-    connectSTA();
-  }
+  updateCollisionGuard();
 
   // Timed calibration run finished → stop exactly on the deadline
   if (calActive && millis() >= calStopMs) {
@@ -536,7 +411,7 @@ void handleWebServer() {
   }
   // Dead-man: RC page repeats drive cmds every 120ms while held; if none
   // arrive for 500ms (WiFi drop, phone sleep), stop the motors.
-  if (g_rcMode && driving && millis() - lastDriveMs > 500) {
+  if (driving && millis() - lastDriveMs > 500) {
     driveBrake(); delay(BRAKE_MS); driveStop();   // brake so a WiFi drop mid-forward halts, not coasts
     driving = false;
     Serial.println("[RC] drive timeout — stopped");

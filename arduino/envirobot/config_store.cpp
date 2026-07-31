@@ -22,7 +22,7 @@ static void clampConfig(RobotConfiguration& c) {
   c.servoNeutral = clampLog("servoNeutral", c.servoNeutral, 0, 180);
   c.servoWater   = clampLog("servoWater", c.servoWater, 0, 180);
   c.servoSoil    = clampLog("servoSoil", c.servoSoil, 0, 180);
-  c.driveSpeed   = clampLog("driveSpeed", c.driveSpeed, 0, 255);
+  c.driveSpeed   = clampLog("driveSpeed", c.driveSpeed, 1, 255);   // navigation.cpp divides by it
   c.turnSpeed    = clampLog("turnSpeed", c.turnSpeed, 0, 255);
   c.soilDryVal   = clampLog("soilDryVal", c.soilDryVal, 0, 4095);
   c.soilWetVal   = clampLog("soilWetVal", c.soilWetVal, 0, 4095);
@@ -35,14 +35,9 @@ static void clampConfig(RobotConfiguration& c) {
   c.turbidityZeroRaw   = clampLog("turbidityZeroRaw", c.turbidityZeroRaw, 0, 4095);
   c.mmPerSecAtDrive    = clampLog("mmPerSecAtDrive", c.mmPerSecAtDrive, 10.0f, 1000.0f);
   c.wheelBaseMm        = clampLog("wheelBaseMm", c.wheelBaseMm, 50.0f, 500.0f);
-  c.wallStopMm         = clampLog("wallStopMm", c.wallStopMm, 30, 2000);
+  c.obstacleStopMm     = clampLog("obstacleStopMm", c.obstacleStopMm, 30, 2000);
   c.sampleSettleMs     = clampLog("sampleSettleMs", c.sampleSettleMs, (uint32_t)200, (uint32_t)10000);
   c.sampleWindowMs     = clampLog("sampleWindowMs", c.sampleWindowMs, (uint32_t)500, (uint32_t)10000);
-  c.headingDeadbandRad = clampLog("headingDeadbandRad", c.headingDeadbandRad, 0.05f, 1.5f);
-  c.waterClearMin      = clampLog("waterClearMin", c.waterClearMin, 0, 65535);
-  c.waterRedRatioMax   = clampLog("waterRedRatioMax", c.waterRedRatioMax, 0.0f, 1.0f);
-  c.soilRedRatioMin    = clampLog("soilRedRatioMin", c.soilRedRatioMin, 0.0f, 1.0f);
-  c.soilBlueRatioMax   = clampLog("soilBlueRatioMax", c.soilBlueRatioMax, 0.0f, 1.0f);
 }
 
 // Rejecting validation for POST — never mutates, names the first bad field.
@@ -51,7 +46,7 @@ const char* validateConfig(const RobotConfiguration& c) {
   if ((f = checkRange("servoNeutral", c.servoNeutral, 0, 180))) return f;
   if ((f = checkRange("servoWater", c.servoWater, 0, 180))) return f;
   if ((f = checkRange("servoSoil", c.servoSoil, 0, 180))) return f;
-  if ((f = checkRange("driveSpeed", c.driveSpeed, 0, 255))) return f;
+  if ((f = checkRange("driveSpeed", c.driveSpeed, 1, 255))) return f;
   if ((f = checkRange("turnSpeed", c.turnSpeed, 0, 255))) return f;
   if ((f = checkRange("soilDryVal", c.soilDryVal, 0, 4095))) return f;
   if ((f = checkRange("soilWetVal", c.soilWetVal, 0, 4095))) return f;
@@ -59,14 +54,9 @@ const char* validateConfig(const RobotConfiguration& c) {
   if ((f = checkRange("turbidityZeroRaw", c.turbidityZeroRaw, 0, 4095))) return f;
   if ((f = checkRange("mmPerSecAtDrive", c.mmPerSecAtDrive, 10.0f, 1000.0f))) return f;
   if ((f = checkRange("wheelBaseMm", c.wheelBaseMm, 50.0f, 500.0f))) return f;
-  if ((f = checkRange("wallStopMm", c.wallStopMm, 30, 2000))) return f;
+  if ((f = checkRange("obstacleStopMm", c.obstacleStopMm, 30, 2000))) return f;
   if ((f = checkRange("sampleSettleMs", c.sampleSettleMs, (uint32_t)200, (uint32_t)10000))) return f;
   if ((f = checkRange("sampleWindowMs", c.sampleWindowMs, (uint32_t)500, (uint32_t)10000))) return f;
-  if ((f = checkRange("headingDeadbandRad", c.headingDeadbandRad, 0.05f, 1.5f))) return f;
-  if ((f = checkRange("waterClearMin", c.waterClearMin, 0, 65535))) return f;
-  if ((f = checkRange("waterRedRatioMax", c.waterRedRatioMax, 0.0f, 1.0f))) return f;
-  if ((f = checkRange("soilRedRatioMin", c.soilRedRatioMin, 0.0f, 1.0f))) return f;
-  if ((f = checkRange("soilBlueRatioMax", c.soilBlueRatioMax, 0.0f, 1.0f))) return f;
   return nullptr;
 }
 
@@ -76,19 +66,15 @@ void mergeConfigJson(JsonObjectConst o, RobotConfiguration& t) {
   if (o.containsKey("turbidityZeroRaw"))   t.turbidityZeroRaw   = o["turbidityZeroRaw"];
   if (o.containsKey("mmPerSecAtDrive"))    t.mmPerSecAtDrive    = o["mmPerSecAtDrive"];
   if (o.containsKey("wheelBaseMm"))        t.wheelBaseMm        = o["wheelBaseMm"];
-  if (o.containsKey("waterClearMin"))      t.waterClearMin      = o["waterClearMin"];
-  if (o.containsKey("waterRedRatioMax"))   t.waterRedRatioMax   = o["waterRedRatioMax"];
-  if (o.containsKey("soilRedRatioMin"))    t.soilRedRatioMin    = o["soilRedRatioMin"];
-  if (o.containsKey("soilBlueRatioMax"))   t.soilBlueRatioMax   = o["soilBlueRatioMax"];
   if (o.containsKey("driveSpeed"))         t.driveSpeed         = o["driveSpeed"];
   if (o.containsKey("turnSpeed"))          t.turnSpeed          = o["turnSpeed"];
-  if (o.containsKey("wallStopMm"))         t.wallStopMm         = o["wallStopMm"];
+  if (o.containsKey("collisionGuardOn"))   t.collisionGuardOn   = o["collisionGuardOn"];
+  if (o.containsKey("obstacleStopMm"))     t.obstacleStopMm     = o["obstacleStopMm"];
   if (o.containsKey("sampleSettleMs"))     t.sampleSettleMs     = o["sampleSettleMs"];
   if (o.containsKey("sampleWindowMs"))     t.sampleWindowMs     = o["sampleWindowMs"];
   if (o.containsKey("servoNeutral"))       t.servoNeutral       = o["servoNeutral"];
   if (o.containsKey("servoWater"))         t.servoWater         = o["servoWater"];
   if (o.containsKey("servoSoil"))          t.servoSoil          = o["servoSoil"];
-  if (o.containsKey("headingDeadbandRad")) t.headingDeadbandRad = o["headingDeadbandRad"];
 }
 
 static void fillDoc(JsonDocument& doc) {
@@ -97,19 +83,15 @@ static void fillDoc(JsonDocument& doc) {
   doc["turbidityZeroRaw"]   = config.turbidityZeroRaw;
   doc["mmPerSecAtDrive"]    = config.mmPerSecAtDrive;
   doc["wheelBaseMm"]        = config.wheelBaseMm;
-  doc["waterClearMin"]      = config.waterClearMin;
-  doc["waterRedRatioMax"]   = config.waterRedRatioMax;
-  doc["soilRedRatioMin"]    = config.soilRedRatioMin;
-  doc["soilBlueRatioMax"]   = config.soilBlueRatioMax;
   doc["driveSpeed"]         = config.driveSpeed;
   doc["turnSpeed"]          = config.turnSpeed;
-  doc["wallStopMm"]         = config.wallStopMm;
+  doc["collisionGuardOn"]   = config.collisionGuardOn;
+  doc["obstacleStopMm"]     = config.obstacleStopMm;
   doc["sampleSettleMs"]     = config.sampleSettleMs;
   doc["sampleWindowMs"]     = config.sampleWindowMs;
   doc["servoNeutral"]       = config.servoNeutral;
   doc["servoWater"]         = config.servoWater;
   doc["servoSoil"]          = config.servoSoil;
-  doc["headingDeadbandRad"] = config.headingDeadbandRad;
 }
 
 void loadConfig() {

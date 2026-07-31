@@ -1,15 +1,11 @@
 #include "sensors.h"
 #include "config.h"
-#include <Adafruit_TCS34725.h>
 
-// 24ms integration: halves detection reaction distance vs 50ms — pond
-// stops are the safety-critical path. Zone thresholds MUST be calibrated
-// at this integration time (raw counts are ~half the 50ms values).
-static Adafruit_TCS34725 tcs(TCS34725_INTEGRATIONTIME_24MS, TCS34725_GAIN_4X);
+// Colour sensor (TCS34725) removed with autonomous mode — the operator
+// identifies zones by eye in RC mode, so there is no I2C device left on the
+// robot. The HC-SR04 below is a collision guard only.
 
 void initSensors() {
-  if (!tcs.begin()) Serial.println("[WARN] TCS34725 not found");
-  // HC-SR04 ultrasonic wall sensor
   pinMode(PIN_ULTRASONIC_TRIG, OUTPUT);
   pinMode(PIN_ULTRASONIC_ECHO, INPUT);
   digitalWrite(PIN_ULTRASONIC_TRIG, LOW);
@@ -45,15 +41,19 @@ static float medianAnalogWindow(int pin) {
   return (n & 1) ? buf[n / 2] : (buf[n / 2 - 1] + buf[n / 2]) / 2.0f;
 }
 
-// DFRobot SEN0189 curve (5V supply). ponytail: curve is only valid
-// ~2.5–4.2V — MUST recalibrate against reference samples before Testing Day.
+// DFRobot SEN0189 curve (5V supply). The raw ADC is scaled back up by
+// TURBIDITY_DIVIDER_RATIO (220Ω/470Ω divider, 1.468×) to recover the
+// sensor-side voltage the datasheet curve expects.
+// ponytail: curve is only valid ~2.5–4.2V — MUST recalibrate against
+// reference samples before Testing Day.
 static float turbidityCurve(float rawAdc) {
   float v = rawAdc * (3.3f / 4095.0f) * TURBIDITY_DIVIDER_RATIO;
   return -1120.4f * v * v + 5742.3f * v - 4353.8f;
 }
 
-float readTurbidityNTU() {
+float readTurbidityNTU(float* rawOut) {
   float raw = medianAnalogWindow(PIN_TURBIDITY);
+  if (rawOut) *rawOut = raw;
   float ntu = turbidityCurve(raw);
   // turbidityZeroRaw wizard point: offset the curve so clear water reads 0.
   // 0 = uncalibrated, curve used as-is.
@@ -79,47 +79,7 @@ float captureRawTurbidity() {
   return medianAnalogWindow(PIN_TURBIDITY);
 }
 
-void captureRawColor(uint16_t* r, uint16_t* g, uint16_t* b, uint16_t* c) {
-  delay(config.sampleSettleMs);
-  tcs.getRawData(r, g, b, c);
-}
-
-// Blue water in a recessed slot: bright-ish, low red ratio.
-// Thresholds live in `config` — calibrate on the REAL arena; sand and
-// wet soil can false-positive under venue lighting.
-static bool classifyWater(uint16_t r, uint16_t c) {
-  if (c < 100) return false;
-  return c > config.waterClearMin && ((float)r / c) < config.waterRedRatioMax;
-}
-
-static bool classifySoil(uint16_t r, uint16_t b, uint16_t c) {
-  if (c < 50) return false;
-  // Reddish-brown disc: elevated red ratio, low blue
-  return ((float)r / c) > config.soilRedRatioMin && ((float)b / c) < config.soilBlueRatioMax;
-}
-
-// getRawData() blocks for one integration period (~50ms) — read once,
-// classify both zone types.
-void readZones(bool* water, bool* soil) {
-  uint16_t r, g, b, c;
-  tcs.getRawData(&r, &g, &b, &c);
-  *water = classifyWater(r, c);
-  *soil  = classifySoil(r, b, c);
-}
-
-bool isWaterZone() {
-  bool w, s;
-  readZones(&w, &s);
-  return w;
-}
-
-bool isSoilPatch() {
-  bool w, s;
-  readZones(&w, &s);
-  return s;
-}
-
-float readWallDistanceMM() {
+float readObstacleDistanceMM() {
   // 10µs trigger pulse, then time the echo. pulseIn returns 0 on timeout.
   digitalWrite(PIN_ULTRASONIC_TRIG, LOW);
   delayMicroseconds(2);
@@ -127,7 +87,7 @@ float readWallDistanceMM() {
   delayMicroseconds(10);
   digitalWrite(PIN_ULTRASONIC_TRIG, LOW);
   unsigned long us = pulseIn(PIN_ULTRASONIC_ECHO, HIGH, ULTRASONIC_TIMEOUT_US);
-  if (us == 0) return 8190.0f;   // no echo → "no wall in sight"
+  if (us == 0) return 8190.0f;   // no echo → "nothing in range"
   // distance = time × speed_of_sound / 2. 0.343 mm/µs at ~20°C.
   return (float)us * 0.343f / 2.0f;
 }

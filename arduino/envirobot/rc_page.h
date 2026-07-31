@@ -53,6 +53,12 @@ a.diag:active { color: #00D4AA; }
 #posbar b.warn { color: #F59E0B; }  /* ≥7:00 — wrap up */
 #posbar b.over { color: #EF4444; }  /* ≥8:00 — overrun, −5 pts */
 
+/* Collision guard readout — the operator needs to know WHY forward died,
+   and needs the guard-off state to be visibly different from "all clear". */
+#obst { font-family: ui-monospace, monospace; font-size: 11px; color: #4A5880; }
+#obst.block { color: #EF4444; font-weight: 600; }
+#obst.off   { color: #F59E0B; }
+
 main {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column;
@@ -93,17 +99,27 @@ main > * { flex-shrink: 0; }
   border-color: rgba(198,40,40,0.35);
   font-size: 18px;
 }
+/* Collision guard tripped: the server refuses FWD, so show it dead rather
+   than letting the operator mash a button that does nothing. */
+.btn[data-cmd="FWD"].blocked {
+  background: rgba(198,40,40,0.14);
+  border-color: rgba(239,68,68,0.55);
+  color: #EF9A9A;
+}
 
-/* ── Sector selector ── */
+/* ── Sector selector — S1..S4 carry the terrain name so the operator can't
+      mis-tag a sample on the square arena's four quadrants ── */
 .sectors { display: flex; gap: 6px; align-items: center; }
 .sectors .label { font-size: 11px; color: #4A5880; letter-spacing: 0.08em; margin-right: 4px; }
 .sector-btn {
-  width: 44px; height: 44px; border-radius: 10px;
+  width: 62px; height: 48px; border-radius: 10px; padding: 0;
   background: #111827; border: 1px solid #1F2D45; color: #8899BB;
   font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
   transition: transform 80ms var(--ease-out), background 80ms var(--ease-out), border-color 80ms var(--ease-out);
   -webkit-tap-highlight-color: transparent;
 }
+.sector-btn small { font-size: 8px; letter-spacing: 0.06em; opacity: 0.75; font-weight: 500; }
 .sector-btn:active { transform: scale(0.94); }
 .sector-btn.active {
   background: rgba(0,212,170,0.12);
@@ -167,15 +183,14 @@ a.sample-btn { text-decoration: none; display: inline-flex; align-items: center;
   <span class="head-right">
     <span id="status">connecting…</span>
     <a class="diag" href="/view">📊 Data</a>
-    <a class="diag" href="/wifi">⚙ WiFi</a>
     <a class="diag" href="/test">🔧 Diag</a>
   </span>
 </header>
 
-<!-- Live dead-reckoned position + run clock + hotspot IP (STA) -->
+<!-- Live dead-reckoned position + run clock + collision-guard distance -->
 <div id="posbar">
   <span>x <b id="posX">0</b>mm · y <b id="posY">0</b>mm · h <b id="posH">0</b>° · ⏱ <b id="runT">--:--</b></span>
-  <span id="staip">no hotspot</span>
+  <span id="obst">◦ — mm</span>
 </div>
 
 <main>
@@ -188,22 +203,23 @@ a.sample-btn { text-decoration: none; display: inline-flex; align-items: center;
     <button class="btn" data-cmd="BWD"   aria-label="Backward">▼</button>
   </div>
 
-  <!-- Sector selector — tag samples with the sector the robot is in -->
+  <!-- Sector selector — tags each sample with the terrain quadrant the robot
+       is standing in. Square arena, +y up: S1 top-left … S4 bottom-right. -->
   <div class="sectors" aria-label="Current sector">
     <span class="label">SECTOR</span>
-    <button class="sector-btn active" data-sector="1">S1</button>
-    <button class="sector-btn" data-sector="2">S2</button>
-    <button class="sector-btn" data-sector="3">S3</button>
-    <button class="sector-btn" data-sector="4">S4</button>
+    <button class="sector-btn active" data-sector="1">S1<small>URBAN</small></button>
+    <button class="sector-btn" data-sector="2">S2<small>FIELD</small></button>
+    <button class="sector-btn" data-sector="3">S3<small>DESERT</small></button>
+    <button class="sector-btn" data-sector="4">S4<small>STONE</small></button>
   </div>
 
   <!-- Sample buttons -->
   <div class="samples">
     <button class="sample-btn water-btn" id="btnWater">💧 Sample Water</button>
     <button class="sample-btn soil-btn"  id="btnSoil">🌱 Sample Soil</button>
-    <button class="sample-btn end-btn"   id="btnStart">▶ Start Auto</button>
     <button class="sample-btn end-btn"   id="btnEnd">🏁 End Run</button>
-    <!-- Native same-origin download — grabs the full run JSON from /data -->
+    <!-- The only way run data leaves the robot: native same-origin download
+         of the full run JSON from /data, then drop it into the webapp /viz. -->
     <a class="sample-btn end-btn" id="btnDownload" href="/data" download="envirobot_run.json" role="button">⬇ Download JSON</a>
   </div>
 
@@ -223,6 +239,7 @@ const logEl    = document.getElementById('log');
 let driveTimer = null;
 let sector     = 1;
 let sampling   = false;  // sample cmd blocks the server ~6s — don't flag "offline"
+let blocked    = false;  // collision guard tripped — server refuses FWD
 
 function ts() {
   return new Date().toLocaleTimeString('en', { hour12: false });
@@ -257,6 +274,11 @@ document.querySelectorAll('.btn[data-cmd]').forEach(btn => {
   const cmd = btn.dataset.cmd;
 
   const startDrive = () => {
+    clearInterval(driveTimer);   // a 2nd button before releasing the 1st would orphan its repeat — robot runs away
+    // Collision guard: FWD is refused by the server (409) while something is
+    // inside obstacleStopMm. Don't start the 120ms repeat against a wall —
+    // reverse or turn to clear it.
+    if (cmd === 'FWD' && blocked) { addLog('Blocked — obstacle ahead, reverse to clear', 'error'); return; }
     post(cmd);
     if (cmd !== 'STOP') driveTimer = setInterval(() => post(cmd), 120);
   };
@@ -308,19 +330,12 @@ document.getElementById('btnSoil').addEventListener('click', async function() {
   else      addLog('Sample failed', 'error');
 });
 
-document.getElementById('btnStart').addEventListener('click', async () => {
-  const data = await post('START');
-  if (data) addLog('Autonomous run STARTED');
-  else      addLog('Start failed (RC mode or RC-only build)', 'error');
-});
-
 document.getElementById('btnEnd').addEventListener('click', async function() {
   this.classList.add('loading');
-  const data = await post('END_RUN');   // upload can take a few seconds
+  const data = await post('END_RUN');
   this.classList.remove('loading');
-  if (!data)               addLog('End run failed', 'error');
-  else if (data.uploaded)  addLog('Run saved + uploaded to cloud ☁');
-  else                     addLog('Run saved locally — upload skipped/failed (retry: End Run again)');
+  if (data) addLog('Run saved to SPIFFS — now hit ⬇ Download JSON');
+  else      addLog('End run failed', 'error');
 });
 
 const $id = id => document.getElementById(id);
@@ -348,7 +363,23 @@ setInterval(async () => {
       ? Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0')
       : '--:--';
     rt.className = t >= 480 ? 'over' : t >= 420 ? 'warn' : '';
-    $id('staip').textContent = p.ip ? 'STA ' + p.ip : 'no hotspot';
+    // Collision guard: d = last ultrasonic ping (mm), blocked = FWD refused,
+    // guard = the guard is switched on (distance is reported either way).
+    // 8190 is the firmware's "no echo, nothing in range" sentinel.
+    const wasBlocked = blocked;
+    blocked = !!p.blocked;
+    const dist = p.d >= 8190 ? '—' : p.d;
+    const ob = $id('obst');
+    if (blocked)        { ob.textContent = '■ BLOCKED ' + p.d + 'mm'; ob.className = 'block'; }
+    else if (!p.guard)  { ob.textContent = '⚠ guard off · ' + dist + ' mm'; ob.className = 'off'; }
+    else                { ob.textContent = '◦ ' + dist + ' mm'; ob.className = ''; }
+    document.querySelector('.btn[data-cmd="FWD"]').classList.toggle('blocked', blocked);
+    if (blocked && !wasBlocked) {
+      clearInterval(driveTimer); driveTimer = null;   // held FWD is dead now
+      addLog('Collision stop at ' + p.d + 'mm — motors cut', 'error');
+    } else if (!blocked && wasBlocked) {
+      addLog('Obstacle clear — forward re-enabled');
+    }
     statusEl.textContent = 'connected'; statusEl.className = 'ok';
   } catch {
     // Sample cmds block the single-threaded server ~6s — a missed poll

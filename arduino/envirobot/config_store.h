@@ -3,7 +3,7 @@
 #include <ArduinoJson.h>
 
 void loadConfig();   // merge /config.json over defaults, clamp, apply to `config`
-void saveConfig();   // serialize `config` (all 18 fields) to /config.json
+void saveConfig();   // serialize `config` (all 14 fields) to /config.json
 void resetConfig();  // delete /config.json, revert `config` to defaults
 
 // Overwrites only the fields present in o. Leaves fields absent from o
@@ -15,5 +15,5 @@ void mergeConfigJson(JsonObjectConst o, RobotConfiguration& target);
 // first offending field (also catches soilDryVal == soilWetVal).
 const char* validateConfig(const RobotConfiguration& c);
 
-// { ...18 fields, runActive }
+// { ...14 fields, runActive }
 String getConfigJSON(bool runActive);

@@ -5,7 +5,8 @@ Decided 2026-07-20 via grilling. Competition Testing Day: Thu 30 July (10 days).
 **Goal (restated):** change tuning values without recompiling. Nothing more.
 
 **Scope cut:** no cloud config. RobotAP + test page already delivers the goal.
-`configFetchUrl` deleted from the design. `uploadUrl` stays (viz-runs, unrelated).
+`configFetchUrl` deleted from the design — and `uploadUrl` went the same way when
+WiFi became AP-only: the robot has no internet path at all now.
 
 ---
 
@@ -48,32 +49,33 @@ struct RobotConfiguration {
   int   turbidityZeroRaw  = 0;      // NEW: clear-water ADC baseline, 0 = uncalibrated
   float mmPerSecAtDrive   = 150.0f;
   float wheelBaseMm       = 150.0f;
-  int   waterClearMin     = 800;
-  float waterRedRatioMax  = 0.40f;
-  float soilRedRatioMin   = 0.45f;
-  float soilBlueRatioMax  = 0.20f;
+  bool  collisionGuardOn  = true;   // guard is optional — master switch
+  int   obstacleStopMm    = 120;    // collision guard threshold
 
   // ── Tunable by hand ─────────────────────────────────────────────
   int      driveSpeed        = 255;
   int      turnSpeed         = 255;
-  int      wallStopMm        = 120;
   uint32_t sampleSettleMs    = 2000;
   uint32_t sampleWindowMs    = 3000;
   int      servoNeutral      = 90;
   int      servoWater        = 0;
   int      servoSoil         = 180;
-  float    headingDeadbandRad = 0.20f;
 };
 extern RobotConfiguration config;
 ```
-18 editable fields.
 
-### Stays `#define` in `config.h`
-WiFi creds, `UPLOAD_URL`, `POS_UPDATE_MS`, `SAMPLE_TICK_MS`, `SENSOR_SAMPLES`,
-`RUN_TIME_LIMIT_MS`, `SECTOR_MAP`, `ENABLE_AUTONOMOUS`, and all autonomous-only
-knobs (`SAMPLE_LOCKOUT_MS`, `POND_BACKOFF_MS`, `SAMPLE_CREEP_*`,
-`SWEEP_LEG_TIMEOUT_MS`, `SAMPLE_TIME_BUDGET_MS`) — `ENABLE_AUTONOMOUS` is 0,
-these are dead weight in the UI.
+13 editable fields. The four colour-classification thresholds and
+`headingDeadbandRad` went away with the colour sensor and the autonomous FSM;
+`wallStopMm` became `obstacleStopMm` when the ultrasonic became a pure
+collision guard.
+
+### Stays `#define` in `config.h` / `hardware_pins.h`
+
+AP creds, `POS_UPDATE_MS`, `SAMPLE_TICK_MS`, `SENSOR_SAMPLES`, `BRAKE_MS`,
+the collision-guard timing (`OBSTACLE_PING_MS`, `OBSTACLE_TRIP_HITS`,
+`OBSTACLE_HYST_MM`), and everything describing physical hardware — pins and
+`TURBIDITY_DIVIDER_RATIO`. Changing a number at runtime cannot move a wire or
+swap a resistor, so those must not be runtime-editable.
 
 ---
 
@@ -90,12 +92,9 @@ Applied on every load and every POST, before the value reaches RAM:
 | `turbidityZeroRaw` | 0–4095 | ADC |
 | `mmPerSecAtDrive` | 10–1000 | absurd values wreck path[] |
 | `wheelBaseMm` | 50–500 | ditto |
-| `wallStopMm` | 30–2000 | below 30 the robot hits the wall |
+| `obstacleStopMm` | 30–2000 | below 30 the robot brakes into what it just saw |
 | `sampleSettleMs` | 200–10000 | 8-min budget |
 | `sampleWindowMs` | 500–10000 | ditto |
-| `headingDeadbandRad` | 0.05–1.5 | below the per-loop turn step → steering hunts |
-| `waterClearMin` | 0–65535 | uint16 channel |
-| ratio fields | 0.0–1.0 | ratios |
 
 Out-of-range on POST → 400 with the offending field named.
 Out-of-range on load from file → clamp silently, log to serial.
@@ -108,7 +107,7 @@ Out-of-range on load from file → clamp silently, log to serial.
 
 - **Load:** struct constructed with defaults → `deserializeJson` → for each key
   present, overwrite. Missing keys keep defaults. No version field, no migration.
-- **Save:** serialize all 18 → write. One file write per Save click.
+- **Save:** serialize all 13 → write. One file write per Save click.
 - **Reset:** `SPIFFS.remove("/config.json")` → re-init struct → apply.
 
 ---
@@ -138,17 +137,17 @@ before advancing. Cancel at any step discards.
 4. "How many degrees did it actually turn?" → user types deg → solve `wheelBaseMm` from commanded vs observed
 5. Offer "Spin again to verify" — repeat until estimated heading returns to start
 
-**Colour / zone** (autonomous only — greyed out with a note while `ENABLE_AUTONOMOUS == 0`)
-1. "Park the colour sensor over a water zone." → Capture
-2. "Park over a soil disc." → Capture
-3. "Park over bare arena floor." → Capture
-4. Auto-derive `waterClearMin` / `waterRedRatioMax` / `soilRedRatioMin` / `soilBlueRatioMax`
-   at the midpoint between each target cluster and the floor cluster.
-5. **Refuse to save if clusters overlap** — show "water and floor are not distinguishable
-   by this sensor at this height/lighting" rather than writing thresholds that can't work.
+**Collision distance**
+1. "Park the robot facing an arena wall at the distance you want it to stop from." → Capture
+2. "How far does it coast after a STOP at full drive speed?" → user types mm
+3. `obstacleStopMm` = standoff + stopping distance — a threshold below the stopping
+   distance means the robot brakes *into* the obstacle it just detected.
+4. **Refuse to continue on "no echo"** — an angled or soft wall reflects the ping away,
+   and a threshold captured from a phantom reading is worse than no guard.
 
 ### Section: Config editor
-18 fields, grouped Calibration / Tuning. Each shows current value, unit, and
+
+13 fields, grouped Calibration / Tuning. Each shows current value, unit, and
 allowed range. Wizard-owned fields are editable too (wizards just fill them).
 
 - Edits are local to the page. **Nothing applies until Save.**
@@ -169,11 +168,13 @@ already implies.
 
 ## 5. Firmware capture endpoint
 
-`POST /cal/capture` with `{"target":"soil_dry"|"soil_wet"|"turb_zero"|"color_water"|"color_soil"|"color_floor"}`
+`POST /cal/capture` with `{"target":"soil_dry"|"soil_wet"|"turb_zero"|"obstacle"}`
 
-Runs the **same** settle → window → median path a real sample uses
+The analogue targets run the **same** settle → window → median path a real sample uses
 (`SAMPLE_SETTLE_MS` → `SAMPLE_WINDOW_MS` at `SAMPLE_TICK_MS`, `SENSOR_SAMPLES`
-ADC averages per tick), returns the raw pre-scaling value. Does not write config —
+ADC averages per tick), returning the raw pre-scaling value. `obstacle` is a single
+live ping instead — the HC-SR04 answers in milliseconds, so there is nothing to average
+away. None of them write config —
 the page collects captures and sends them in the normal Save.
 
 Rationale: calibration endpoints must be measured by the function that measures
@@ -220,9 +221,9 @@ the run, or every reading carries a systematic offset.
 | Config editor UI | 2h |
 | Soil + turbidity wizards | 1.5h |
 | Motion wizard | 1.5h |
-| Colour wizard | 1.5h |
+| Collision-distance wizard | 1h |
 | Hardware verification | 2h |
 | **Total** | **~12h** |
 
-Colour wizard is the only one deferrable — `ENABLE_AUTONOMOUS` is 0.
-Cut it first if time is short. ~10.5h without it.
+The collision-distance wizard is the only deferrable one — `obstacleStopMm` can also
+be set by hand in the config editor off a `tests/test_ultrasonic` reading.

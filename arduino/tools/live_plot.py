@@ -22,9 +22,9 @@ import sys
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
-# Matches both RC and autonomous firmware lines:
+# Matches the firmware's sample lines:
 #   [SAMPLE] S1 WATER 42.3 NTU
-#   [SAMPLE] S2 SOIL 68.5%  (5/12)
+#   [SAMPLE] S2 SOIL 68.5%
 SAMPLE_RE = re.compile(r"\[SAMPLE\] S(\d+) (WATER|SOIL)\s+([\d.]+)")
 
 CSV_PATH = "samples.csv"
@@ -116,9 +116,9 @@ def make_pos_reader(pos_url):
 
 
 # ── Live position (URL mode only — /pos has no serial equivalent) ────
-ARENA_RADIUS_MM = 750   # rulebook §5.1: ~1.5 m diameter
+ARENA_HALF_MM = 750     # 1500mm square arena, origin = centre
 path = []               # [(x_mm, y_mm)] dead-reckoned trail
-last_pos = None         # latest /pos dict {"x","y","h","t"}
+last_pos = None         # latest /pos dict {"x","y","h","t","d","blocked"}
 
 # ── Display: table + live arena + two labelled bar charts (rulebook 6.2.2) ──
 fig = plt.figure("EnviroBot Live Data", figsize=(12, 8))
@@ -133,18 +133,21 @@ def draw_arena():
     ax_arena.clear()
     ax_arena.set_aspect("equal")
     ax_arena.set_title("Live position", fontsize=10)
-    lim = ARENA_RADIUS_MM * 1.1
+    lim = ARENA_HALF_MM * 1.1
     ax_arena.set_xlim(-lim, lim)
     ax_arena.set_ylim(-lim, lim)
     ax_arena.set_xlabel("x (mm)")
     ax_arena.set_ylabel("y (mm)")
-    # Octagon boundary — matches the outline drawn on the /view page
-    oct_pts = [(ARENA_RADIUS_MM * math.cos(math.pi / 4 * i - math.pi / 8),
-                ARENA_RADIUS_MM * math.sin(math.pi / 4 * i - math.pi / 8)) for i in range(8)]
-    oct_pts.append(oct_pts[0])
-    ax_arena.plot([p[0] for p in oct_pts], [p[1] for p in oct_pts], color="#2A3E5E", lw=1)
+    # Square boundary — matches the outline drawn on the /view page
+    a = ARENA_HALF_MM
+    ax_arena.plot([-a, a, a, -a, -a], [-a, -a, a, a, -a], color="#2A3E5E", lw=1)
+    # Terrain quadrant dividers + labels (S1 Urban TL … S4 Stone BR)
     ax_arena.axhline(0, color="#8899BB", lw=0.6, ls=":")
     ax_arena.axvline(0, color="#8899BB", lw=0.6, ls=":")
+    for label, sx, sy in (("S1 URBAN", -1, 1), ("S2 FIELD", 1, 1),
+                          ("S3 DESERT", -1, -1), ("S4 STONE", 1, -1)):
+        ax_arena.text(sx * a * 0.5, sy * a * 0.85, label, ha="center", va="center",
+                      fontsize=6, color="#8899BB")
     if path:
         ax_arena.plot([p[0] for p in path], [p[1] for p in path], color="#00D4AA", lw=1.5)
         x, y = path[-1]

@@ -1,8 +1,12 @@
 /*
- * test_ultrasonic — HC-SR04 wall sensor bring-up
+ * test_ultrasonic — HC-SR04 collision sensor bring-up
+ * The robot's only obstacle sensor: the firmware cuts forward drive when
+ * this reads closer than config.obstacleStopMm.
  * Wiring: TRIG=GPIO16, ECHO=GPIO17 (through a 5V→3.3V divider).
  * Prints distance in mm. Wave a hand / wall in front and watch it track.
  * "no echo" = out of range, or ECHO not wired / divider wrong.
+ * Use this to pick obstacleStopMm: park the robot where you want it to
+ * stop and read the number off serial.
  */
 #define PIN_TRIG 16
 #define PIN_ECHO 17

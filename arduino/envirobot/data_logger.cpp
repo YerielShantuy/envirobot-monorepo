@@ -19,9 +19,12 @@ static unsigned long startMs = 0;
 // or autonomous START).
 static bool live = false;
 
-// Rulebook 5.1: terrains are "examples only" — confirm on Testing Day and
-// update this table before the run.
-static const char* TERRAINS[5] = {"Unknown", "Sandpaper", "Wet Soil", "Grass", "Sand"};
+// Square arena, four 750×750mm terrain quadrants (origin = centre, +y up):
+//   S1 Urban  = top-left      S2 Field = top-right
+//   S3 Desert = bottom-left   S4 Stone = bottom-right
+// Indexed by sector number, so index 0 is the "sector unknown" slot.
+// Confirm the quadrant→terrain mapping on Testing Day and edit here.
+static const char* TERRAINS[5] = {"Unknown", "Urban", "Field", "Desert", "Stone"};
 
 void initDataLogger() {
   doc.clear();
@@ -40,6 +43,7 @@ void initDataLogger() {
 
 void startRun() {
   initDataLogger();
+  resetPosition();   // scored path starts at origin, not at the drift since boot
   live = true;
   Serial.println("[RUN] clock started");
 }
@@ -111,14 +115,15 @@ String getSamplesJSON() {
   String arr;
   serializeJson(samplesArr, arr);
   if (arr.length() == 0 || arr == "null") arr = "[]";
-  return String("{\"t_s\":") + String((millis() - startMs) / 1000.0f, 1) +
+  return String("{\"t_s\":") + String(runElapsedS(), 1) +
          ",\"samples\":" + arr + "}";
 }
 
 String getRunJSON() {
   // Fresh boot with no samples yet → serve the last saved run so judges
-  // can still pull data after a reboot.
-  if (samplesArr.size() == 0 && SPIFFS.exists("/data/results.json")) {
+  // can still pull data after a reboot. Never during a live run — that would
+  // serve the previous run's path/samples mid-run.
+  if (!live && samplesArr.size() == 0 && SPIFFS.exists("/data/results.json")) {
     File f = SPIFFS.open("/data/results.json", FILE_READ);
     if (f) { String out = f.readString(); f.close(); return out; }
   }

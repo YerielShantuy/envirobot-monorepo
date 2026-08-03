@@ -1,0 +1,109 @@
+Case Comp 101
+
+Closing Night judging: 
+After 45 mins of brainstorming, our judges will walk around the room & start hearing your pitches
+
+They’ll come to your table and you present the solution - no slides needed
+
+3 minutes max to present your solution
+
+Few questions will be asked! So... don’t rely on AI 
+
+Case competitions... is there a right and wrong?
+
+No single correct answer
+
+How well did you use your Testing Day data?
+
+Did you satisfy the problem requirements?
+
+What trade offs did you consider?
+
+IS IT A DEFENSIBLE ANSWER? 
+
+
+Can your team speak in a structured manner for 3
+minutes? Will the judges be convinced?
+
+Case Comp 101
+
+Our Criteria: 
+
+Evidence 
+Every decision needs a number behind it 
+Report each hole separately, don't average
+Data beats assumptions, even if the terrain "looks" a certain way
+
+Constraints
+Read the question twice before talking
+Assign someone to check the plan against every requirement
+If a requirement's ambiguous, say how you interpreted it
+
+Trade-offs
+Every real plan gives something up
+Name your weakness before a judge finds it
+Ask: what did we say no to, and why was that worth it
+
+Communication
+Lead with your recommendation, not your process
+Structure: recommendation → evidence → trade-off
+Rehearse once, out loud, before judges arrive
+One person should NOT team carry, everyone should pitch in (unless you have 6 people in your group) 
+
+Case Comp 101
+
+45 mins in total
+
+Read ⟶ Data ⟶ Decide ⟶ Build ⟶ Rehearse
+
+5 min 10 min 15 min 10 min 5 min
+
+
+Practice
+A drought has hit the region. The council has exactly one water truck, and it can only reach
+one zone per week. It will be several weeks before every zone has been reached.
+
+
+Your team surveyed all four zones at Testing Day. Recommend which zone gets the truck first,
+and what order the remaining zones should follow.
+                         Your Testing Day data ⟶ 
+
+There is no fixed threshold here. 
+
+Use your judgment about what counts as urgent,
+but back it with the numbers.
+
+Deliverable: your ranking of all four zones, your reasoning for
+whichever zone you send the truck to first, and what you're
+accepting by putting a zone last.
+
+Kensington: averages to "fine," but hole 1 = 8%.
+Hidden emergency, cheap fix
+
+Randwick: weak everywhere, no digging required
+
+Coogee: good soil, worst water in the region. Looks
+safe, isn't
+
+Maroubra: middling, easiest to justify last
+
+Randwick first → worst overall
+
+Kensington first → cheapest fix to a real emergency
+
+Coogee first → the problem you'd miss checking soil
+alone
+
+All defensible: mark is in the reasoning, not the
+ranking
+Recommendation first ... no "so first we discussed..."
+
+Evidence: actual numbers, both holes cited, never
+averaged
+
+Comparison: why this zone over the next-best option
+
+Trade-off: named unprompted, before anyone asks
+
+You could even try doing some research to back up
+your point....
